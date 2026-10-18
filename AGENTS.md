@@ -20,7 +20,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 用户**自行创建和维护仓库**。Agent 在收到具体实施任务后才修改项目；不要自行创建第二个项目、替换现有项目或擅自扩大范围。
 - NVR 继续负责现有录像和硬盘存储；本项目只做只读查询、受控媒体转发与播放，不接管录像写入。
 - 初期不实现设备配置修改、固件升级、磁盘操作、用户管理、PTZ、AI 分析或公网直连 NVR。
-- 遵循 `docs/DEVELOPMENT_PLAN.md` 的 P0 → P1 → P2 → P3 顺序。可以并行诊断 P1，但**历史 RTSP 回放未验证成功前，不得声称历史 Web 回放可用**。
+- 遵循 `docs/DEVELOPMENT_PLAN.md` 的 P0 → P1 → P2 → P3 顺序。可以并行诊断 P1，但**历史 RTSP 回放未验证成功前，不得声称该 RTSP 路径已可用**。2026-10-18 追加授权的 HTTP 文件限时预览例外见第 6 节；不能把此预览当作完整历史回放。
 
 ## 2. 固定技术栈
 
@@ -31,7 +31,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 | 前后端契约 | TypeScript + Zod | 为输入、输出和错误结构建立共享契约。 |
 | 依赖管理 | pnpm（推荐 workspaces） | 尽量复用仓库既有结构，不擅自迁移包管理器。 |
 | 视频处理 | FFmpeg + MediaMTX（按验证结果选用） | 直播与历史回放必须分别设计；先确认源可播放再接入桥接。 |
-| 浏览器播放 | HLS 优先；Safari 原生 HLS，其他浏览器可用 hls.js | 根据实测兼容性决定是否需要转码。 |
+| 浏览器播放 | HLS 优先；Safari 原生 HLS，其他浏览器可用 hls.js | 按用户要求在浏览器本机解码，不自动回退到服务端转码。 |
 | 部署 | Docker Compose，目标 PVE 上的 Linux 环境 | 入口通过受控反向代理和 HTTPS；内部服务不暴露公网。 |
 
 - 按用户 2026-10-18 明确要求：Hono 挂载于 `app/api/[[...route]]/route.ts`，只运行一个 Next.js 实例。Route Handler 仅适配 Request/Response，设备业务由 Hono 模块实现。
@@ -46,6 +46,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - `GET /ISAPI/ContentMgmt/record/tracks`：成功；出现 `101`、`201` 等轨道。
 - 轨道配置可能报告 `<Enable>false</Enable>`，**这不等于没有历史录像**。
 - `POST /ISAPI/ContentMgmt/search`：成功；在设备按北京时间查询 `2026-10-17`、轨道 `101` 时获得 **13 段**连续录像及 `playbackURI`，搜索结果报告 `H.264-BP`。
+- 同一查询首片段经原样换封装后，ffprobe 实测为 **HEVC / H.265 Main，2560×1440**。搜索编码元数据与真实媒体不一致；不得用搜索字段限制编码支持，播放时读取实际容器编码。用户明确要求同时支持 H.264 与 H.265，保持浏览器本机解码。
 - **实测 XML 字段为 `searchResultPostion`**（注意原厂拼写）。不要“修正”为 `searchResultPosition`。该设备成功响应的请求不要求 `metadataList`。
 - Mac 上 VLC **可以播放实时 RTSP**：`/Streaming/Channels/101`。
 - Mac 上 VLC **尚不能播放历史 RTSP**：`/Streaming/tracks/101/?starttime=...&endtime=...&name=...&size=...`。根因未确认，不能把搜索成功当作历史播放成功。
@@ -97,6 +98,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 4. **基线失败后**，才逐项测试 URL 变体：尾随 `/`、移除 `name/size`、不同时段、其他设备文档中的回放路径；一次只改变一个变量并记录结果。
 5. 先证明某一历史片段能在 VLC 或 FFmpeg 中解码，再实施 Hono 管理的历史播放会话、媒体封装和 Next.js 时间轴 seek。
 6. 如果标准 RTSP 回放持续失败，单独调研 ISAPI 录像下载或设备 SDK 的替代方案；未经验证不标记为“支持”。
+
+**2026-10-18 用户追加决定：** 解码留在用户本机。标准历史 RTSP 仍阻塞，但 HTTP 下载已成功读取并通过本机 FFmpeg 解码验证；用户授权先沿此替代路径实现有限文件预览，并明确要求支持 H.264 与 H.265。服务端仅 `-c:v copy` 换封装，视频由浏览器解码；不得自动回退到服务端转码。该例外仅覆盖文件开头最多 30 秒的无声预览，不代表历史 RTSP、全天任意 seek、文件时间映射或 Safari 已通过验收。后续以开发计划和验证记录为准。
 
 **资源约束：** 媒体会话必须设置超时、TTL、并发上限及关闭/切换时的清理；子进程用安全的参数数组启动，不通过 Shell 拼接外部输入；HLS 临时文件设清理和容量边界。
 

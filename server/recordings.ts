@@ -133,6 +133,22 @@ export class NvrService {
       this.active--
     }
   }
+  async resolveSegment(trackId: string, date: string, id: string) {
+    const segment = (await this.queryRaw(trackId, date)).find(
+      (segment) =>
+        createHmac("sha256", this.key)
+          .update(segment.playbackURI)
+          .digest("hex")
+          .slice(0, 32) === id
+    )
+    if (!segment)
+      throw new AppError(
+        "RECORDING_NOT_FOUND",
+        404,
+        "录像已变化，请刷新查询后重试。"
+      )
+    return segment
+  }
   async recordings(trackId: string, date: string): Promise<Recordings> {
     const key = `${trackId}|${date}`,
       cached = this.cache.get(key)

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test"
 
 const range = { startAt: "2026-10-16T16:00:00Z", endAt: "2026-10-17T16:00:00Z" }
 const segment = {
-  id: "synthetic-one",
+  id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   startAt: range.startAt,
   endAt: "2026-10-16T17:00:00Z",
   codec: "H.264-BP",
@@ -73,7 +73,7 @@ for (const mobile of [false, true]) {
     })
     await page.goto("/")
     await expect(page.getByText("1 个录像片段")).toBeVisible()
-    await expect(page.getByText("历史播放待联调")).toBeVisible()
+    await expect(page.getByText("历史文件预览")).toBeVisible()
     const bar = page.getByRole("button", {
       name: "片段 1，00:00:00 至 01:00:00",
       exact: true,

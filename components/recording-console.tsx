@@ -32,6 +32,7 @@ import {
 } from "@/shared/contracts"
 import { getJson } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { PreviewPlayer } from "@/components/preview-player"
 
 function clock(iso: string, timeZone: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -334,9 +335,9 @@ export function RecordingConsole() {
                     </div>
                     <Alert>
                       <CircleAlertIcon />
-                      <AlertTitle>历史播放待联调</AlertTitle>
+                      <AlertTitle>历史文件预览</AlertTitle>
                       <AlertDescription>
-                        当前可检索和查看录像区间。历史视频播放尚未验证，选择片段仅查看时间信息。
+                        选择片段后可预览文件开头。全天任意时刻回放与精确时间定位仍待验证。
                       </AlertDescription>
                     </Alert>
                     {segment && (
@@ -346,8 +347,19 @@ export function RecordingConsole() {
                           {clock(segment.startAt, data.timeZone)} —{" "}
                           {clock(segment.endAt, data.timeZone)}
                         </strong>
-                        <span>{segment.codec ?? "编码未提供"}</span>
+                        <span>
+                          设备报告：{segment.codec ?? "编码未提供"}
+                          ；实际编码以预览为准
+                        </span>
                       </div>
+                    )}
+                    {segment && (
+                      <PreviewPlayer
+                        key={`${key}|${segment.id}`}
+                        track={track}
+                        date={date}
+                        segmentId={segment.id}
+                      />
                     )}
                     {!data.segments.length ? (
                       <Empty className="py-14">
@@ -412,8 +424,8 @@ export function RecordingConsole() {
           </section>
         </div>
         <footer className="console-footer">
-          <span>录像保留在 NVR，本控制台仅查询。</span>
-          <span>历史播放验证完成后开放播放功能</span>
+          <span>录像保留在 NVR，预览仅使用临时内存。</span>
+          <span>浏览器本机解码 · 文件开头限时预览</span>
         </footer>
       </main>
     </div>

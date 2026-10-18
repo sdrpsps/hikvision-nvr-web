@@ -1,4 +1,4 @@
-# P0 / P1 验证记录 — 2026-10-18
+# P0 / P1 / P2 有限预览验证记录 — 2026-10-18
 
 本文只保存脱敏摘要。未保存设备地址、账户、密码、原始 playbackURI、认证头、完整序列号、录像标识或视频画面。
 
@@ -79,7 +79,7 @@ FFprobe 与直接 Node TCP/Digest 复核结果一致；历史 URI 未取得 SDP�
 
 **尚未确认：** 该账户的历史回放权限、原生客户端同段可播情况、固件历史 RTSP 请求约定、时间语义。VLC 早先人工事实为失败，本轮没有控制 VLC 播放，也没有检查或修改账户权限、设备设置。
 
-## 备选方案研究，未接入
+## 首轮备选方案研究（当时尚未接入）
 
 厂商公开说明提供搜索结果 URI 用于录像文件下载的流程；SDK 提供按时间回放并通过回调获取码流的能力。这些是候选途径，不能自动推断本型号/固件/平台可用：
 
@@ -87,16 +87,182 @@ FFprobe 与直接 Node TCP/Digest 复核结果一致；历史 URI 未取得 SDP�
 - [官方 SDK：NET_DVR_PlayBackByTime_V40](https://open.hikvision.com/hardware/definitions/NET_DVR_PlayBackByTime_V40.html)
 - [官方型号级 ISAPI / OTAP 文档入口](https://tpp.hikvision.com/download/ISAPI_OTAP?type=1)，部分材料需合作伙伴权限；本轮未签署协议或申请账户。
 
-本轮仅执行了只读 `GET /ISAPI/ContentMgmt/download/capabilities`，实机报告：
+首轮实现验收阶段仅执行了只读 `GET /ISAPI/ContentMgmt/download/capabilities`，实机报告：
 
 ```json
 { "byTime": false, "byFileName": true }
 ```
 
-**实际下载、HTTP 码流解码、SDK 集成均待验证。** 下载能力声明不等于已可替代浏览器播放。本轮未尝试下载视频，也未引入 SDK。
+首轮验收时实际下载、HTTP 码流解码、SDK 集成均待验证。**后续 14:15 的研究补充已验证 HTTP 文件下载响应解码 3 帧，见下节；SDK 仍未引入。**
 
 ## 阶段门槛与下一步
 
-P0 的基础实现和指定 13 段样本验收已完成，设备时间语义和 Safari 仍待验证。P1 历史解码、任意指定时间回放仍阻塞；P2/P3 保持未实施。
+P0 的基础实现和指定 13 段样本验收已完成，设备时间语义和 Safari 仍待验证。P1 标准历史 RTSP、任意指定时间回放仍阻塞；HTTP 文件下载响应的头部解码已在下节验证。该时点 P2/P3 未实施；后续用户授权的文件预览见文末记录。
 
-最小下一步：在设备原生客户端确认同一日期/轨道可回放，核对当前账户的回放权限，并对照一处可信录像时间；同时可单独验证按文件名下载的有限读取/解码路径。不要升级固件或修改配置来掩盖当前证据，也不要仅凭搜索或直播成功进入历史 Web 播放集成。
+最小下一步：在设备原生客户端确认同一日期/轨道可回放，核对当前账户的回放权限，并对照一处可信录像时间；按文件名下载的有限读取/解码已取得下节证据，下一步应验证完整文件、时间映射与定位行为。不要升级固件或修改配置来掩盖当前证据，也不要仅凭搜索或直播成功进入历史 Web 播放集成。
+
+
+## 14:15 补充：官方 / GitHub 研究与 HTTP 历史数据解码
+
+用户请求查询海康文档、互联网与 GitHub 的解决方案。本次未修改业务代码或设备配置；使用本地临时诊断脚本进行有上限的只读测试，媒体只在本机内存与管道中经过，未保存或对外发送画面。
+
+### 来源与适用范围
+
+- [海康搜索与下载 NVR 录像说明](https://www.hikvisioneurope.com/eu/portal/portal/Technology%20Partner%20Program/03-How%20to/How%20to%20search%20and%20download%20the%20video%20file%20from%20NVR%20via%20ISAPI.pdf)：搜索返回 playbackURI，可用于下载接口。该 PDF 的完整直接抓取多次失败；索引正文给出 GET query / POST XML 示例，实际行为以下面的本机验证为准。
+- [HikLoad 的 ContentMgmt 源码](https://github.com/Tedyst/HikLoad/blob/master/hikload/hikvisionapi/_ContentMgmt.py) 与 [HTTP 实现](https://github.com/Tedyst/HikLoad/blob/master/hikload/hikvisionapi/utils.py)：GET /ISAPI/ContentMgmt/download，XML body 中放 playbackURI。Node fetch 不支持 GET body，若采用此旧式方式应使用能发送 GET body 的 HTTP 客户端；本机 POST XML 同样成功，优先考虑 POST。
+- [hikvision-download-assistant](https://github.com/cfryanr/hikvision-download-assistant)：提供 GET + XML body 下载示例；作者明确仅在指定 IPC 上实测，NVR 兼容只是预期。不能仅凭其 README 宣称本型号可用，本次已另做实机验证。
+- [FFmpeg MPEG-PS 解复用源码](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mpeg.c)：包含 IMKH 头识别以及相关 CCTV 流处理。下载返回 IMKH 不意味着必须先去掉文件头或安装海康播放器；本次保留头部、使用 -f mpeg 直接解码成功。
+- [ivms666 recordings.py](https://github.com/sadensmol/ivms666/blob/main/recordings.py)：作者将该设备的 CMSearch / RTSP 时间解释为带 Z 的本地墙钟时间，并显式转换为真正 UTC。与本机观察相似，但不构成本机时间语义已验证的证据。
+- [CameraDashboard 诊断笔记](https://github.com/jasondillingham/CameraDashboard-portfolio/blob/main/notes.md)：作者的设备需要保留尾斜杠、使用主码流，并限制取流时长。我们原始基线已经保留尾斜杠、使用 101 主码流；因此这两条不能解释本机现有失败，且不应推广成所有型号的规则。
+- [海康 iSecure Center 回放 URL 文档](https://open.hikvision.com/docs/16741aecc05944a6b0cd1341d68e4546)：playBackMode=1 属于平台返回短 URL 的说明，要求平台与取流服务；不能直接套用到本机 NVR 的 ISAPI 原始 URI。
+- [官方 SDK 按时间回放接口](https://open.hikvision.com/hardware/definitions/NET_DVR_PlayBackByTime_V40.html)：可创建回放并配合播放控制与码流回调；作为后备研究，不代表本机已完成 SDK 或平台适配。
+
+### RTSP 新增变体（仍失败）
+
+均从当次搜索取得的原始 URI 开始，仅改变表中对应因素；不修改服务端配置、不打印 URI：
+
+| 变体 | 实机结果 |
+| --- | --- |
+| 重新测试原始 URI | OPTIONS 401→200，DESCRIBE 400 |
+| 时间中的 T/Z 改为小写 | DESCRIBE 400 |
+| 时间去掉末尾 Z | DESCRIBE 400 |
+| 紧凑时间改为带分隔符的 ISO 格式 | DESCRIBE 400 |
+| Streaming 路径改为小写 | DESCRIBE 400 |
+
+以上失败只能排除这些单独变体作为本机直接修复方案，不能证明已穷尽所有请求组合或确认固件根因。
+
+### HTTP 下载路径：已验证（实机，有限读取/解码）
+
+重新检索 101 / 2026-10-17 的第一个历史片段，保留原始 playbackURI 的尾斜杠、时间、name、size，XMLBuilder 正确转义 &。Digest 凭据从 .env 读取，认证头与 URI 均不输出。
+
+请求形态（占位值）：
+
+```http
+POST /ISAPI/ContentMgmt/download
+Content-Type: application/xml
+
+<downloadRequest version="1.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <playbackURI>搜索结果中的原始 URI，经 XML 实体转义</playbackURI>
+</downloadRequest>
+```
+
+| 请求 | 实机结果 |
+| --- | --- |
+| POST + XML body | HTTP 200，IMKH 封装；有限读取约 64 KiB 后断开 |
+| GET + XML body | HTTP 200，IMKH 封装；有限读取约 64 KiB 后断开 |
+| GET query 中放 URL 编码的 playbackURI | HTTP 400，statusCode=6，subStatusCode=badXmlContent |
+| POST + XML body → FFmpeg 管道 | HTTP 200，读取 1,693,712 字节；FFmpeg exitCode=0，**decodedFrames=3**，未超时，输出 null |
+
+解码参数：
+
+```sh
+# 由本地 HTTP 客户端将已通过 Digest 认证的响应体送到 stdin。
+# 凭据不进入 FFmpeg 参数，不落盘视频。
+ffmpeg -nostdin -v error -f mpeg -i pipe:0 \
+  -map 0:v:0 -frames:v 3 -an -f null - -progress pipe:1
+```
+
+诊断顺序为 POST XML、GET XML body、GET query，随后单独重开 POST 做有限解码；每个操作顺序执行。读取探测上限约 64 KiB（允许当前传输块），解码读取上限 8 MiB（允许当前传输块）、总时限 25 秒；子进程完成后关闭 HTTP 流。临时脚本只含配置读取逻辑与占位流程，未持久化原始媒体。
+
+**证据边界：** 已证实本机能返回并解码指定历史片段请求的媒体数据，不能再把所有历史媒体获取视为完全阻塞。标准 RTSP 仍然 DESCRIBE 400；完整文件、文件与实际录像时间对应、音频、任意位置 seek、Range、跨片段和浏览器播放尚未验证。按文件名下载可能返回完整文件并忽略缩窄后的时间窗口，不能假定等同于按时间回放；可参考 [HikLoad #41](https://github.com/Tedyst/HikLoad/issues/41) 的实际报告。
+
+**推荐下一步：** 把已验证的 HTTP XML 下载方式整理成正式的有限诊断 CLI，进一步验证完整文件与时间映射、首帧延迟及定位成本，再决定历史播放是否采用 HTTP 下载转封装的备选设计。P2 前仍需显式完成新的历史源验收，不把 3 帧解码直接当作播放器可用。
+
+## 14:32 补充：HTTP 文件预览，浏览器本机解码
+
+用户明确要求“解码留在本机而不是服务端解码”，授权先做可验证的 HTTP 替代路径。本轮先验证源的有限换封装，再集成播放器，没有把旧的 RTSP DESCRIBE 400 标记为解决。
+
+### 实现与边界
+
+- 仍为一个 Next.js Node.js 实例；Hono 处理查询、Digest、下载和媒体会话。Route Handler 新增 POST / DELETE 适配。
+- 浏览器只提交轨道、日期、匿名片段 ID。服务端重新查询并匹配已签发的 ID，保留原始 playbackURI 用于固定 ISAPI 下载接口；不接受客户端 URL，也不返回原始 URI。
+- HTTP 下载响应从管道进入 FFmpeg，`-f mpeg -i pipe:0 -map 0:v:0 -c:v copy -an -sn -dn -t 30`，输出 fragmented MP4。**服务端不进行视频解码、滤镜或编码**。容器结构解析计算时长，生成 VOD HLS；[FFmpeg streamcopy 文档](https://ffmpeg.org/ffmpeg.html#Streamcopy)、[fragmented MP4 文档](https://ffmpeg.org/ffmpeg-formats.html#mov_002c-mp4_002c-ismv)。
+- Safari 分支使用原生 HLS，Chrome 使用 hls.js / `<video>` 在本机解码；**Safari 分支只实现，尚未实机验证**。
+- 该轮提供文件开头最多 30 秒无声预览，可暂停并在预览内部 seek；当时误用搜索字段将其称作 H.264 预览。**后续 14:40 实测更正：同一首片段实际为 HEVC；现已按用户要求支持 H.264 / H.265，见下节。** 未把全天时间轴定位映射到文件位置，也不回退到服务端转码。
+- 两个会话槽含准备中，TTL 120 秒，换封装时限 30 秒，源 32 MiB、输出 16 MiB 上限。全部媒体在内存中，不写视频文件；关闭/切换/离开请求清理，取消/超时中止下载并杀掉子进程，TTL 兜底。浏览器已经缓冲的数据不会因会话过期而被远程撤回。
+
+### 实机证据
+
+```sh
+pnpm verify:preview 101 2026-10-17
+```
+
+输出：`mode=stream-copy`、`durationSeconds=30`、`initBytes=848`、`mediaBytes=4805418`、`decodedOnServer=false`。CLI 只做有限换封装和结构验证，不读取像素；后面的浏览器测试另行证明压缩视频可以解码。
+
+```sh
+TEST_BASE_URL=http://127.0.0.1:3001 NVR_INTEGRATION=1 pnpm test:e2e
+```
+
+7 项通过，包括查询的原有 13 段验收、合成 HLS 播放、失败/重试/取消及真实历史预览。真实片段连续打开两次：
+
+| 操作 | 实机结果 |
+| --- | --- |
+| 创建预览 | 两次 POST 均 201，mode=stream-copy |
+| 浏览器加载 | 两次 duration=30 秒，readyState ≥ 3 |
+| 播放并读取本机解码计数 | getVideoPlaybackQuality().totalVideoFrames 为 20 / 9，均大于 3 |
+| 暂停 | paused=true |
+| 预览内 seek 第 10 秒并继续 | seeking=false，currentTime 接近 10，重新播放后继续增加 |
+| 关闭 | DELETE 204；原 HLS 入口随后 GET 404 |
+| 进程回收 | 测试后 pgrep -x ffmpeg 退出 1，无 FFmpeg 进程 |
+
+测试禁用截图、视频和 trace，只读取帧数、时长及播放状态，未采集家中画面。另用人工素材截图检查 375px 布局，未出现页面横向溢出。仓库新增的 `synthetic-preview.mp4` 为 FFmpeg 人工测试图，与真实录像无关；复现命令为：
+
+```sh
+ffmpeg -nostdin -v error -f lavfi -i testsrc2=size=160x90:rate=12 \
+  -t 3 -c:v libx264 -profile:v baseline -pix_fmt yuv420p -an \
+  -movflags +frag_keyframe+empty_moov+default_base_moof \
+  -frag_duration 1000000 -f mp4 fixtures/synthetic-preview.mp4
+```
+
+此命令仅生成测试素材，不是应用的媒体处理路径。
+
+### 自动测试、修复与遗留项
+
+- `pnpm test`：65 项通过。新增下载 Digest/错误/外部 URL 拒绝、fMP4 结构和时长、原样复制参数、会话并发/TTL/取消/过期/关闭、未知录像与不兼容编码，以及 FFmpeg 缺失、空输出、30 秒超时、源和输出容量上限的清理测试。
+- `pnpm typecheck`、`pnpm lint`、`pnpm build` 通过。构建对外部 FFmpeg 可执行程序使用明确的 tracing 排除，不将整个项目作为动态可执行文件路径追踪。
+- 首轮浏览器实机 POST 被同源检查误拦为 403：Next.js 规范化 request.url 后与浏览器 Origin 的主机不同。现用请求 Host 还原 authority，保留协议及端口检查和 cross-site 拒绝；补上回归测试，随后实机播放通过。
+- 仍未完成：标准历史 RTSP、任意历史时刻定位、文件时间映射、全长/跨片段、音频、Safari、P3 部署和鉴权。真实帧数表示浏览器成功解码，不证明硬件加速启用，也不证明时间轴时刻已与画面核准。
+- 下一步：对照一处可确认的录像时刻核准文件起点，测定位成本，再扩大预览时长或设计按需读取。当前最小预览已可使用，整个 P1/P2 仍不能标记完成。
+
+## 14:40 更正与验收：H.264 / H.265 双编码
+
+用户指出录像应为 H.265，并明确要求同时支持 H.264 与 H.265。先只读重查 101 / 2026-10-17 首片段，按原有 `-c:v copy` 流程换封装，再在本机以 ffprobe 读取编码概要；媒体仅在内存与管道中，不保存画面、不输出 URI 或设备凭据。
+
+ffprobe 查询字段为 `stream=index,codec_name,codec_type,profile,width,height,pix_fmt`，探测限时 10 秒，输出上限 8 KiB。脱敏结果：
+
+```json
+{
+  "metadataCodec": "H.264-BP",
+  "actualStream": {
+    "codec_name": "hevc",
+    "codec_type": "video",
+    "profile": "Main",
+    "width": 2560,
+    "height": 1440,
+    "pix_fmt": "yuvj420p"
+  }
+}
+```
+
+**结论：该样本实际是 H.265，搜索报告编码不准确。** 之前成功的浏览器预览也是 HEVC，不能把搜索元数据当作真实编码，更不能由该样本推断所有轨道/日期均为同一编码。原样换封装没有把 H.265 变成 H.264。
+
+本轮修正：
+
+- 移除依赖搜索字段的 H.264 限制。换封装后读取实际 MP4 sample entry：avc1/avc3 识别为 h264，hvc1/hev1 识别为 hevc；其他编码报错并释放会话，不转码。
+- 临时预览响应新增 `codec`，页面明确显示实际 H.264 / AVC 或 H.265 / HEVC。片段详情将原编码标记为“设备报告”。
+- `verify:preview` 同时输出 `metadataCodec` 和实际 `codec`。正式 CLI 实机结果为 `metadataCodec=H.264-BP`、`codec=hevc`，duration=30 秒，init=848、media=4,805,418 字节，decodedOnServer=false。
+- 新增人工 HEVC 素材，与真实录像无关。生成参数与此前人工 H.264 素材相同，但编码器改为 `-c:v libx265 -profile:v main -pix_fmt yuv420p -x265-params log-level=error:pools=1:frame-threads=1`。仅生成测试素材时编码，应用仍只进行 stream copy。
+
+验证命令与结果：
+
+| 命令 | 结果 |
+| --- | --- |
+| pnpm test | 66 项通过，含实际容器编码识别、错误/缺失搜索编码不阻断播放、非 AVC/HEVC 拒绝 |
+| pnpm typecheck / pnpm lint / pnpm build | 均通过 |
+| TEST_BASE_URL=http://127.0.0.1:3001 NVR_INTEGRATION=1 pnpm test:e2e | 8 项通过；人工 H.264、人工 H.265 本机解码/暂停/seek/关闭和 375px 无溢出；真实 HEVC 两次播放成功 |
+| pnpm verify:preview 101 2026-10-17 | 实际 codec=hevc，与 ffprobe 一致 |
+| pgrep -x ffmpeg | 退出 1，无残留 FFmpeg 进程 |
+
+真实两次会话均 `codec=hevc`、duration=30，浏览器实际解码计数为 10 / 9；预览内第 10 秒 seek、继续播放及关闭后 404 均通过。H.264 的本轮证据来自人工素材浏览器测试，未声称该 NVR 的某一 H.264 历史样本已验证。全部真实媒体测试禁用截图、录屏和 trace。
+
+**兼容性边界：** hls.js 的 [HEVC/fMP4 支持取决于运行环境](https://github.com/video-dev/hls.js#features)。当前本机 Chrome 实测可用；Safari 与其他系统组合仍待验证。不把双编码接入宣称为所有浏览器均能播放，不自动转码；文件起点映射、任意时间定位与完整历史回放的待验收项不变。

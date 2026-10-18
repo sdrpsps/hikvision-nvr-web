@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "verify:device": "tsx scripts/verify-device.ts",
-    "diagnose:rtsp": "tsx scripts/diagnose-rtsp.ts"
+    "diagnose:rtsp": "tsx scripts/diagnose-rtsp.ts",
+    "verify:preview": "tsx scripts/verify-preview.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -22,6 +23,7 @@
     "cn": "^0.5.0",
     "dotenv": "^18.0.8",
     "fast-xml-parser": "^5.11.2",
+    "hls.js": "^1.7.3",
     "hono": "^4.13.13",
     "lucide-react": "^1.58.0",
     "next": "16.4.0",
