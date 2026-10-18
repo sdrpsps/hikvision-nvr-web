@@ -59,7 +59,7 @@ export function LiveConsole() {
     return channels?.some((channel) => channel.id === id) ? id : ""
   }
   return (
-    <div className="console-shell">
+    <div className="console-shell live-shell">
       <header className="console-header">
         <div className="console-brand">
           <div className="brand-mark">
@@ -172,65 +172,69 @@ export function LiveConsole() {
                 }}
               />
             </div>
-            <VideoWall
-              count={layout}
-              label="实时预览窗口"
-              renderWindow={(index) => (
-                <section
-                  className={cn(
-                    "live-window",
-                    selected === index && "is-selected"
-                  )}
-                  aria-label={`窗口 ${index + 1}`}
-                  onFocusCapture={() => setSelected(index)}
-                  onPointerDown={() => setSelected(index)}
-                >
-                  <div className="window-heading">
-                    <button
-                      className="window-selector"
-                      type="button"
-                      aria-label={`选择窗口 ${index + 1}`}
-                      aria-pressed={selected === index}
-                      onClick={() => setSelected(index)}
-                    >
-                      窗口 {index + 1}
-                    </button>
-                    <NativeSelect
-                      aria-label={`窗口 ${index + 1} 通道`}
-                      value={trackFor(index)}
-                      disabled={!channels?.length}
-                      onChange={(event) =>
-                        setAssignments((old) => ({
-                          ...old,
-                          [index]: event.target.value,
-                        }))
-                      }
-                    >
-                      <NativeSelectOption value="">选择通道</NativeSelectOption>
-                      {channels?.map((channel) => (
-                        <NativeSelectOption key={channel.id} value={channel.id}>
-                          {channel.name}
+            <div className="live-wall-viewport" data-layout={layout}>
+              <VideoWall
+                count={layout}
+                label="实时预览窗口"
+                renderWindow={(index) => (
+                  <section
+                    className={cn(
+                      "live-window",
+                      selected === index && "is-selected"
+                    )}
+                    aria-label={`窗口 ${index + 1}`}
+                    onFocusCapture={() => setSelected(index)}
+                    onPointerDown={() => setSelected(index)}
+                  >
+                    <div className="window-heading">
+                      <button
+                        className="window-selector"
+                        type="button"
+                        aria-label={`选择窗口 ${index + 1}`}
+                        aria-pressed={selected === index}
+                        onClick={() => setSelected(index)}
+                      >
+                        窗口 {index + 1}
+                      </button>
+                      <NativeSelect
+                        aria-label={`窗口 ${index + 1} 通道`}
+                        value={trackFor(index)}
+                        disabled={!channels?.length}
+                        onChange={(event) =>
+                          setAssignments((old) => ({
+                            ...old,
+                            [index]: event.target.value,
+                          }))
+                        }
+                      >
+                        <NativeSelectOption value="">
+                          选择通道
                         </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </div>
-                  <StreamPlayer
-                    ref={(player) => {
-                      if (player) players.current.set(index, player)
-                      else players.current.delete(index)
-                    }}
-                    key={`${generation}|${trackFor(index)}`}
-                    track={trackFor(index)}
-                    live
-                  />
-                </section>
-              )}
-            />
+                        {channels?.map((channel) => (
+                          <NativeSelectOption
+                            key={channel.id}
+                            value={channel.id}
+                          >
+                            {channel.name}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                    <StreamPlayer
+                      ref={(player) => {
+                        if (player) players.current.set(index, player)
+                        else players.current.delete(index)
+                      }}
+                      key={`${generation}|${trackFor(index)}`}
+                      track={trackFor(index)}
+                      live
+                    />
+                  </section>
+                )}
+              />
+            </div>
           </section>
         </div>
-        <footer className="console-footer">
-          {/* 待定 */}
-        </footer>
       </main>
     </div>
   )
