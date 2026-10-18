@@ -13,6 +13,7 @@ export class IsapiClient {
       ![
         "/ISAPI/System/deviceInfo",
         "/ISAPI/ContentMgmt/record/tracks",
+        "/ISAPI/ContentMgmt/InputProxy/channels",
         "/ISAPI/ContentMgmt/search",
         "/ISAPI/System/time",
         "/ISAPI/ContentMgmt/download/capabilities",

@@ -71,7 +71,7 @@ for (const mobile of [false, true]) {
       }
       return route.fulfill({ json: data })
     })
-    await page.goto("/")
+    await page.goto("/playback")
     await expect(page.getByText("1 个录像片段")).toBeVisible()
     await expect(page.getByText("历史文件预览")).toBeVisible()
     const bar = page.getByRole("button", {
@@ -122,7 +122,7 @@ test("device disconnect has a retryable error", async ({ page }) => {
       json: { error: { code: "NVR_UNREACHABLE", message: "无法连接设备。" } },
     })
   )
-  await page.goto("/")
+  await page.goto("/playback")
   await expect(page.getByText("录像查询失败")).toBeVisible()
   await expect(page.getByRole("button", { name: "重新查询" })).toBeEnabled()
 })
@@ -134,7 +134,7 @@ test("real LAN acceptance: track 101 / 2026-10-17", async ({ page }) => {
   )
   const errors: string[] = []
   page.on("pageerror", (error) => errors.push(error.name))
-  await page.goto("/")
+  await page.goto("/playback")
   await expect(page.getByLabel("设备日期")).toBeEnabled()
   await page.getByLabel("设备日期").fill("2026-10-17")
   await expect(page.getByText("13 个录像片段")).toBeVisible()

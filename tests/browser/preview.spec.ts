@@ -53,7 +53,7 @@ async function mockQueries(page: Page) {
       },
     })
   )
-  await page.goto("/")
+  await page.goto("/playback")
   await page.locator(".timeline-segment").first().click()
 }
 async function playAndSeek(page: Page, target: number) {
@@ -197,7 +197,7 @@ test("real LAN preview: browser decoding, pause/seek and repeated cleanup", asyn
   test.setTimeout(90000)
   const errors: string[] = []
   page.on("pageerror", (error) => errors.push(error.name))
-  await page.goto("/")
+  await page.goto("/playback")
   await expect(page.getByLabel("设备日期")).toBeEnabled()
   await page.getByLabel("设备日期").fill("2026-10-17")
   await expect(page.getByText("13 个录像片段")).toBeVisible()

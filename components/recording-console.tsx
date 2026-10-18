@@ -33,6 +33,7 @@ import {
 import { getJson } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { PreviewPlayer } from "@/components/preview-player"
+import { ConsoleNav } from "@/components/console-nav"
 
 function clock(iso: string, timeZone: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -141,6 +142,7 @@ export function RecordingConsole() {
             NVR 控制台
           </span>
         </div>
+        <ConsoleNav active="playback" />
         <Badge variant="outline">只读查询</Badge>
       </header>
       <main className="console-main">
@@ -424,8 +426,7 @@ export function RecordingConsole() {
           </section>
         </div>
         <footer className="console-footer">
-          <span>录像保留在 NVR，预览仅使用临时内存。</span>
-          <span>浏览器本机解码 · 文件开头限时预览</span>
+          {/* 待定 */}
         </footer>
       </main>
     </div>

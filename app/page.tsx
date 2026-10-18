@@ -1,5 +1,5 @@
-import { RecordingConsole } from "@/components/recording-console"
+import { LiveConsole } from "@/components/live-console"
 
 export default function Page() {
-  return <RecordingConsole />
+  return <LiveConsole />
 }

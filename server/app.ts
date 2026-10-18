@@ -1,6 +1,12 @@
 import { Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
-import { previewRequestSchema, previewSchema } from "../shared/contracts"
+import {
+  liveRequestSchema,
+  liveSchema,
+  previewRequestSchema,
+  previewSchema,
+} from "../shared/contracts"
+import { LiveSessions } from "./live"
 import { PreviewSessions } from "./preview"
 import {
   channelsSchema,
@@ -15,7 +21,8 @@ import { todayIn } from "./time"
 
 export function createApp(
   getService: () => NvrService = defaultService,
-  previews = new PreviewSessions()
+  previews = new PreviewSessions(),
+  live = new LiveSessions()
 ) {
   const app = new Hono().basePath("/api")
   app.use("*", async (c, next) => {
@@ -70,6 +77,50 @@ export function createApp(
     await next()
   })
   app.post(
+    "/streams/live",
+    bodyLimit({
+      maxSize: 1024,
+      onError: (c) =>
+        c.json(
+          { error: { code: "INVALID_BODY", message: "请求内容过大。" } },
+          400
+        ),
+    }),
+    async (c) => {
+      if (!c.req.header("content-type")?.startsWith("application/json"))
+        throw new AppError("INVALID_BODY", 400, "请使用 JSON 请求。")
+      const parsed = liveRequestSchema.safeParse(
+        await c.req.json().catch(() => undefined)
+      )
+      if (!parsed.success)
+        throw new AppError(
+          "INVALID_BODY",
+          400,
+          "请选择合法通道，不接受其他参数。"
+        )
+      const service = getService()
+      return c.json(
+        liveSchema.parse(
+          await live.create(
+            service.config,
+            async () => {
+              const channels = await service.channels()
+              if (!channels.some((channel) => channel.id === parsed.data.track))
+                throw new AppError(
+                  "CHANNEL_NOT_FOUND",
+                  404,
+                  "设备未返回此通道。"
+                )
+              return parsed.data.track
+            },
+            c.req.raw.signal
+          )
+        ),
+        201
+      )
+    }
+  )
+  app.post(
     "/streams/playback",
     bodyLimit({
       maxSize: 1024,
@@ -108,6 +159,22 @@ export function createApp(
   app.get("/streams/:id/:asset", (c) => {
     const id = c.req.param("id"),
       asset = c.req.param("asset")
+    if (live.has(id)) {
+      if (asset === "audio") {
+        const after = c.req.query("after") ?? "-1"
+        if (!/^(?:-1|0|[1-9]\d{0,9})$/.test(after))
+          throw new AppError("INVALID_QUERY", 400, "音频游标无效。")
+        return c.json(live.audio(id, Number(after)))
+      }
+      if (asset === "index.m3u8")
+        return c.body(live.playlist(id), 200, {
+          "Content-Type": "application/vnd.apple.mpegurl",
+        })
+      return c.body(new Uint8Array(live.asset(id, asset)), 200, {
+        "Content-Type":
+          asset === "init.mp4" ? "video/mp4" : "video/iso.segment",
+      })
+    }
     if (asset === "index.m3u8")
       return c.body(previews.playlist(id), 200, {
         "Content-Type": "application/vnd.apple.mpegurl",
@@ -121,6 +188,7 @@ export function createApp(
     })
   })
   app.delete("/streams/:id", (c) => {
+    live.delete(c.req.param("id"))
     previews.delete(c.req.param("id"))
     return c.body(null, 204)
   })

@@ -147,6 +147,9 @@ export function splitFragmentedMp4(buffer: Buffer) {
     init: buffer.subarray(0, first.start),
     media: buffer.subarray(first.start),
     durationSeconds,
+    startSeconds: min / timescale,
     codec,
   }
 }
+
+export { boxes as mp4Boxes, u32 as mp4U32 }

@@ -6,11 +6,12 @@ import { coverageAndGaps, dayRange } from "./time"
 import {
   buildSearch,
   parseDevice,
+  parseInputProxyNames,
   parseSearch,
   parseTracks,
   type RawSegment,
 } from "./xml"
-import type { Recordings } from "../shared/contracts"
+import type { Channel, Recordings } from "../shared/contracts"
 
 export function validatePlaybackUri(uri: string, config: NvrConfig) {
   try {
@@ -40,8 +41,9 @@ export class NvrService {
   private key = randomBytes(32)
   private channelsCache?: {
     expires: number
-    data: ReturnType<typeof parseTracks>
+    data: Channel[]
   }
+  private channelsPending?: Promise<Channel[]>
   private cache = new Map<string, { expires: number; result: Recordings }>()
   private pending = new Map<string, Promise<Recordings>>()
   private active = 0
@@ -57,9 +59,31 @@ export class NvrService {
   async channels() {
     if (this.channelsCache && this.channelsCache.expires > Date.now())
       return this.channelsCache.data
-    const data = parseTracksSafe(
+    if (this.channelsPending) return this.channelsPending
+    this.channelsPending = this.loadChannels().finally(() => {
+      this.channelsPending = undefined
+    })
+    return this.channelsPending
+  }
+  private async loadChannels(): Promise<Channel[]> {
+    const tracks = parseTracksSafe(
       await this.client.request("/ISAPI/ContentMgmt/record/tracks")
     )
+    let names = new Map<string, string>()
+    if (tracks.some((track) => track.sourceChannelId)) {
+      try {
+        names = parseInputProxyNames(
+          await this.client.request("/ISAPI/ContentMgmt/InputProxy/channels")
+        )
+      } catch {
+        // Names enrich the existing track list; unsupported/forbidden/timeout
+        // responses must not prevent querying or playing otherwise valid tracks.
+      }
+    }
+    const data = tracks.map(({ sourceChannelId, ...track }) => ({
+      ...track,
+      name: (sourceChannelId && names.get(sourceChannelId)) || track.name,
+    }))
     this.channelsCache = { data, expires: Date.now() + 20000 }
     return data
   }

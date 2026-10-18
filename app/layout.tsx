@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils"
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "录像档案 · NVR 控制台",
-  description: "只读检索 NVR 录像，查看全天录像时间轴。",
+  title: "NVR 控制台",
+  description: "多窗口实时预览与历史录像查询。",
 }
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" })

@@ -59,3 +59,32 @@ export const previewSchema = z.object({
   codec: z.enum(["h264", "hevc"]),
 })
 export type Preview = z.infer<typeof previewSchema>
+
+export const liveRequestSchema = z.strictObject({ track: trackIdSchema })
+export const liveSchema = previewSchema.omit({ durationSeconds: true })
+export type LiveStream = z.infer<typeof liveSchema>
+
+export const liveAudioSchema = z.object({
+  status: z.enum(["pending", "available", "unsupported"]),
+  videoStartSeconds: z.number().finite(),
+  chunks: z
+    .array(
+      z.object({
+        sequence: z.number().int().nonnegative(),
+        codec: z.enum(["alaw", "ulaw"]),
+        sampleRate: z.union([
+          z.literal(8000),
+          z.literal(16000),
+          z.literal(32000),
+          z.literal(48000),
+        ]),
+        channels: z.union([z.literal(1), z.literal(2)]),
+        startSeconds: z.number().finite(),
+        data: z
+          .string()
+          .max(350000)
+          .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+      })
+    )
+    .max(80),
+})

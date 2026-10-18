@@ -13,12 +13,17 @@ const parser = new XMLParser({
 const object = z.record(z.string(), z.unknown())
 const list = (value: unknown) =>
   value === undefined ? [] : Array.isArray(value) ? value : [value]
-function root(xml: string, name: string): Record<string, unknown> {
+function root(
+  xml: string,
+  name: string,
+  allowEmpty = false
+): Record<string, unknown> {
   // No custom/external entities or document types from the device.
   if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true)
     throw invalidXml()
   try {
     const parsed = object.parse(parser.parse(xml))
+    if (allowEmpty && parsed[name] === "") return {}
     return object.parse(parsed[name])
   } catch {
     throw invalidXml()
@@ -42,12 +47,31 @@ export function parseTracks(xml: string) {
     const enabled = track.Enable ?? track.enable
     if (enabled !== undefined && enabled !== "true" && enabled !== "false")
       throw invalidXml()
+    const source = object.safeParse(track.SrcDescriptor)
+    const sourceChannel = trackIdSchema.safeParse(
+      source.success ? source.data.SrcChannel : undefined
+    )
     return {
       id: id.data,
       name: text(track.name ?? track.trackName, `轨道 ${id.data}`),
       configuredEnabled: enabled === undefined ? null : enabled === "true",
+      ...(sourceChannel.success ? { sourceChannelId: sourceChannel.data } : {}),
     }
   })
+}
+export function parseInputProxyNames(xml: string) {
+  const data = root(xml, "InputProxyChannelList", true)
+  const names = new Map<string, string>()
+  for (const item of list(data.InputProxyChannel)) {
+    const channel = object.parse(item)
+    const id = trackIdSchema.parse(channel.id)
+    const name = text(channel.name, "").trim()
+    if (!name) continue
+    if (name.length > 256 || (names.has(id) && names.get(id) !== name))
+      throw invalidXml()
+    names.set(id, name)
+  }
+  return names
 }
 const instant = z.iso.datetime({ offset: true })
 export type RawSegment = {
