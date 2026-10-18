@@ -1,0 +1,1 @@
+<?xml version="1.0"?><TrackList xmlns="http://www.hikvision.com/ver20/XMLSchema"><Track><id>101</id><Enable>false</Enable></Track><Track><id>201</id><Enable>true</Enable><name>测试通道</name></Track></TrackList>

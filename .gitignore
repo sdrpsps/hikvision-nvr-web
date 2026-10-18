@@ -30,6 +30,11 @@ pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+/dist/
+/playwright-report/
+/test-results/
+/.pnpm-store/
 
 # vercel
 .vercel
