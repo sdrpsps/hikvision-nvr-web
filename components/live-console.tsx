@@ -13,7 +13,14 @@ import { getJson } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -143,8 +150,12 @@ export function LiveConsole() {
             <ul className="channel-list">
               {channels?.map((channel) => (
                 <li key={channel.id}>
-                  <button
+                  <Button
                     type="button"
+                    variant={
+                      trackFor(selected) === channel.id ? "secondary" : "ghost"
+                    }
+                    className="h-auto w-full justify-start py-2.5"
                     aria-pressed={trackFor(selected) === channel.id}
                     onClick={() =>
                       setAssignments((old) => ({
@@ -153,10 +164,10 @@ export function LiveConsole() {
                       }))
                     }
                   >
-                    <VideoIcon aria-hidden="true" />
-                    <span>{channel.name}</span>
+                    <VideoIcon data-icon="inline-start" aria-hidden="true" />
+                    <span className="truncate">{channel.name}</span>
                     <span className="channel-id">{channel.id}</span>
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -187,38 +198,51 @@ export function LiveConsole() {
                     onPointerDown={() => setSelected(index)}
                   >
                     <div className="window-heading">
-                      <button
+                      <Button
                         className="window-selector"
                         type="button"
+                        size="xs"
+                        variant={selected === index ? "secondary" : "ghost"}
                         aria-label={`选择窗口 ${index + 1}`}
                         aria-pressed={selected === index}
                         onClick={() => setSelected(index)}
                       >
                         窗口 {index + 1}
-                      </button>
-                      <NativeSelect
-                        aria-label={`窗口 ${index + 1} 通道`}
+                      </Button>
+                      <Select
+                        items={[
+                          { label: "选择通道", value: "" },
+                          ...(channels?.map((channel) => ({
+                            label: channel.name,
+                            value: channel.id,
+                          })) ?? []),
+                        ]}
                         value={trackFor(index)}
                         disabled={!channels?.length}
-                        onChange={(event) =>
+                        onValueChange={(value) =>
                           setAssignments((old) => ({
                             ...old,
-                            [index]: event.target.value,
+                            [index]: value ?? "",
                           }))
                         }
                       >
-                        <NativeSelectOption value="">
-                          选择通道
-                        </NativeSelectOption>
-                        {channels?.map((channel) => (
-                          <NativeSelectOption
-                            key={channel.id}
-                            value={channel.id}
-                          >
-                            {channel.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
+                        <SelectTrigger
+                          size="sm"
+                          aria-label={`窗口 ${index + 1} 通道`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value="">选择通道</SelectItem>
+                            {channels?.map((channel) => (
+                              <SelectItem key={channel.id} value={channel.id}>
+                                {channel.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
                     </div>
                     <StreamPlayer
                       ref={(player) => {

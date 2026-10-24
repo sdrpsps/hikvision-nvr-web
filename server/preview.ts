@@ -83,7 +83,20 @@ export class PreviewSessions {
     const { durationSeconds } = this.get(id)
     return `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${Math.ceil(durationSeconds)}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:${durationSeconds.toFixed(6)},\nsegment.m4s\n#EXT-X-ENDLIST\n`
   }
-  delete(id: string) {
+  status(id: string) {
+    return { complete: true, durationSeconds: this.get(id).durationSeconds }
+  }
+  async audio(id: string) {
+    this.get(id)
+    return { status: "unsupported" as const, videoStartSeconds: 0, chunks: [] }
+  }
+  async asset(id: string, asset: string) {
+    const media = this.get(id)
+    if (asset !== "init.mp4" && asset !== "segment.m4s")
+      throw new AppError("MEDIA_NOT_FOUND", 404, "媒体资源不存在。")
+    return asset === "init.mp4" ? media.init : media.media
+  }
+  async delete(id: string) {
     const session = this.sessions.get(id)
     if (!session) return
     this.sessions.delete(id)

@@ -53,12 +53,16 @@ export const previewRequestSchema = recordingsQuerySchema.extend({
 export const previewSchema = z.object({
   id: z.uuid(),
   playlistUrl: z.string().regex(/^\/api\/streams\/[a-f0-9-]{36}\/index\.m3u8$/),
-  durationSeconds: z.number().positive().max(40),
+  durationSeconds: z.number().finite().positive(),
   expiresAt: z.iso.datetime(),
   mode: z.literal("stream-copy"),
   codec: z.enum(["h264", "hevc"]),
 })
 export type Preview = z.infer<typeof previewSchema>
+export const playbackStatusSchema = z.object({
+  complete: z.boolean(),
+  durationSeconds: z.number().finite().nonnegative(),
+})
 
 export const liveRequestSchema = z.strictObject({ track: trackIdSchema })
 export const liveSchema = previewSchema.omit({ durationSeconds: true })

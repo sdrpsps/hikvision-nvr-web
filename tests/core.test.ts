@@ -21,6 +21,7 @@ const config = readNvrConfig({
   NVR_HOST: "nvr.test",
   NVR_USERNAME: "test-user",
   NVR_PASSWORD: "test-secret",
+  NVR_RECORDING_TIME_MODE: "utc",
 })
 
 describe("XML contract", () => {
@@ -449,12 +450,12 @@ describe("query limits and cleanup", () => {
       now.mockRestore()
     }
   })
-  it("flags impossible future metadata without silently shifting timestamps", async () => {
+  it("keeps explicit UTC metadata without generating time-verification notices", async () => {
     const { service } = mockedService([
       fixture("search").replaceAll("2026-10-16", "2099-10-16"),
     ])
     const result = await service.recordings("101", "2099-10-17")
-    expect(result.warnings).toEqual(["FUTURE_RECORDING_TIME"])
+    expect(result.warnings).toEqual([])
     expect(result.segments[0].startAt).toBe("2099-10-16T16:00:00.000Z")
   })
   it("kills a timed-out diagnostic child and removes its private manifest", async () => {

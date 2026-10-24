@@ -2,6 +2,7 @@ import { XMLBuilder, XMLParser, XMLValidator } from "fast-xml-parser"
 import { z } from "zod"
 import { trackIdSchema } from "../shared/contracts"
 import { invalidXml } from "./errors"
+import { recordingInstant, type RecordingTimeOptions } from "./time"
 
 const parser = new XMLParser({
   ignoreAttributes: true,
@@ -82,7 +83,10 @@ export type RawSegment = {
   codec?: string
   recordType?: string
 }
-export function parseSearch(xml: string): {
+export function parseSearch(
+  xml: string,
+  time?: RecordingTimeOptions
+): {
   matches: number
   more: boolean
   segments: RawSegment[]
@@ -107,8 +111,8 @@ export function parseSearch(xml: string): {
       const match = object.parse(item),
         span = object.parse(match.timeSpan),
         media = object.parse(match.mediaSegmentDescriptor)
-      const startAt = instant.parse(span.startTime),
-        endAt = instant.parse(span.endTime)
+      const startAt = recordingInstant(instant.parse(span.startTime), time),
+        endAt = recordingInstant(instant.parse(span.endTime), time)
       if (Date.parse(endAt) <= Date.parse(startAt)) throw invalidXml()
       return {
         trackId: trackIdSchema.parse(match.trackID),

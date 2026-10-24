@@ -39,6 +39,11 @@ const configSchema = z.object({
         return false
       }
     }),
+  // This firmware labels recording wall-clock fields with Z. Keep the wire
+  // convention separate from the time zone used by the calendar and public API.
+  NVR_RECORDING_TIME_MODE: z
+    .enum(["device-local", "utc"])
+    .default("device-local"),
   NVR_TIMEOUT_MS: z.coerce.number().int().min(100).max(60000).default(8000),
 })
 export type NvrConfig = z.infer<typeof configSchema>

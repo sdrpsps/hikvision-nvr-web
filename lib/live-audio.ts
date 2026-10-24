@@ -15,6 +15,21 @@ export class LocalLiveAudio {
   private emptyPolls = 0
   private closed = false
   private waiting = true
+  private revision = 0
+  private polling = false
+  private seek = () => {
+    this.pause()
+    if (this.playback) {
+      this.revision++
+      this.blocks = []
+      this.cursor = -1
+      this.emptyPolls = 0
+    }
+  }
+  private rateChange = () => {
+    this.stopSources()
+    this.schedule()
+  }
   private pause = () => {
     this.waiting = true
     this.stopSources()
@@ -26,11 +41,14 @@ export class LocalLiveAudio {
     private video: HTMLVideoElement,
     private id: string,
     private ptsOffset: () => number | undefined,
-    private onError: (message: string) => void
+    private onError: (message: string) => void,
+    private playback = false
   ) {
     this.waiting = video.paused || video.readyState < 3
-    for (const event of ["waiting", "pause", "seeking"])
+    for (const event of ["waiting", "pause", "ended"])
       video.addEventListener(event, this.pause)
+    video.addEventListener("seeking", this.seek)
+    video.addEventListener("ratechange", this.rateChange)
     for (const event of ["playing", "seeked"])
       video.addEventListener(event, this.playing)
     this.tick = setInterval(() => this.schedule(), 100)
@@ -43,17 +61,21 @@ export class LocalLiveAudio {
     void this.poll()
   }
   private async poll() {
+    if (this.closed || this.polling) return
+    this.polling = true
+    const revision = this.revision
     try {
       const result = await getJson(
-        `/api/streams/${this.id}/audio?after=${this.cursor}`,
+        `/api/streams/${this.id}/audio?after=${this.cursor}${this.playback ? `&at=${Math.max(0, this.video.currentTime).toFixed(3)}` : ""}`,
         liveAudioSchema,
         this.controller.signal
       )
       if (this.closed) return
+      if (revision !== this.revision) return
       if (result.status === "unsupported")
-        throw new Error("此通道音频格式暂不支持本机播放，视频可继续预览。")
+        throw new Error("未检测到受支持的音轨，视频可继续播放。")
       if (result.status === "pending" && ++this.emptyPolls > 5)
-        throw new Error("未收到可播放的音轨，请确认此通道已启用音频。")
+        throw new Error("未收到可播放的音轨。")
       this.fallbackOffset = result.videoStartSeconds
       for (const chunk of result.chunks) {
         const bytes = Uint8Array.from(atob(chunk.data), (char) =>
@@ -81,7 +103,6 @@ export class LocalLiveAudio {
       }
       this.blocks = this.blocks.slice(-80)
       this.schedule()
-      this.pollTimer = setTimeout(() => void this.poll(), 500)
     } catch (error) {
       if (!this.closed) {
         this.onError(
@@ -89,6 +110,9 @@ export class LocalLiveAudio {
         )
         this.close()
       }
+    } finally {
+      this.polling = false
+      if (!this.closed) this.pollTimer = setTimeout(() => void this.poll(), 500)
     }
   }
   private schedule() {
@@ -112,6 +136,7 @@ export class LocalLiveAudio {
       if (skip >= block.buffer.duration) continue
       const source = this.context.createBufferSource()
       source.buffer = block.buffer
+      source.playbackRate.value = this.video.playbackRate
       source.connect(this.context.destination)
       source.onended = () => {
         this.sources.delete(source)
@@ -120,7 +145,9 @@ export class LocalLiveAudio {
       this.sources.add(source)
       block.scheduled = true
       source.start(
-        this.context.currentTime + Math.max(0, start - now) + 0.02,
+        this.context.currentTime +
+          Math.max(0, start - now) / this.video.playbackRate +
+          0.02,
         skip
       )
     }
@@ -141,8 +168,10 @@ export class LocalLiveAudio {
     clearTimeout(this.pollTimer)
     this.stopSources()
     this.blocks = []
-    for (const event of ["waiting", "pause", "seeking"])
+    for (const event of ["waiting", "pause", "ended"])
       this.video.removeEventListener(event, this.pause)
+    this.video.removeEventListener("seeking", this.seek)
+    this.video.removeEventListener("ratechange", this.rateChange)
     for (const event of ["playing", "seeked"])
       this.video.removeEventListener(event, this.playing)
     void this.context.close().catch(() => {})

@@ -2,7 +2,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { IsapiClient } from "./isapi"
-import { coverageAndGaps, dayRange } from "./time"
+import { coverageAndGaps, dayRange, recordingSearchTime } from "./time"
 import {
   buildSearch,
   parseDevice,
@@ -96,6 +96,10 @@ export class NvrService {
       if (!(await this.channels()).some((channel) => channel.id === trackId))
         throw new AppError("TRACK_NOT_FOUND", 404, "设备中不存在此录像轨道。")
       const range = dayRange(date, this.config.NVR_TIME_ZONE)
+      const time = {
+        timeZone: this.config.NVR_TIME_ZONE,
+        mode: this.config.NVR_RECORDING_TIME_MODE,
+      }
       // Device endTime is inclusive to seconds; API interval is [start, next midnight).
       const inclusiveEnd = new Date(Date.parse(range.endAt) - 1000)
         .toISOString()
@@ -114,8 +118,15 @@ export class NvrService {
         const response = parseSearch(
           await this.client.request(
             "/ISAPI/ContentMgmt/search",
-            buildSearch(trackId, range.startAt, inclusiveEnd, searchId, offset)
-          )
+            buildSearch(
+              trackId,
+              recordingSearchTime(range.startAt, time),
+              recordingSearchTime(inclusiveEnd, time),
+              searchId,
+              offset
+            )
+          ),
+          time
         )
         let added = 0
         for (const segment of response.segments) {
@@ -134,7 +145,15 @@ export class NvrService {
             Date.parse(segment.startAt) < Date.parse(range.endAt) &&
             Date.parse(segment.endAt) > Date.parse(range.startAt)
           )
-            result.push(segment)
+            result.push({
+              ...segment,
+              // Convert the search's inclusive last second back to the API's
+              // exclusive day boundary; do not add a second at file junctions.
+              endAt:
+                Date.parse(segment.endAt) === Date.parse(inclusiveEnd)
+                  ? new Date(range.endAt).toISOString()
+                  : segment.endAt,
+            })
         }
         if (!response.more)
           return result.sort(
@@ -198,11 +217,7 @@ export class NvrService {
           range,
           segments,
           ...coverageAndGaps(segments, range),
-          warnings: segments.some(
-            (segment) => Date.parse(segment.endAt) > Date.now() + 60000
-          )
-            ? ["FUTURE_RECORDING_TIME"]
-            : [],
+          warnings: [],
         }
         for (const [key, item] of this.cache)
           if (item.expires <= Date.now()) this.cache.delete(key)

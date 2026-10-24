@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { test, expect, type Page } from "@playwright/test"
+import { selectOption } from "./controls"
 import { splitFragmentedMp4 } from "../../server/mp4"
 
 async function channels(page: Page) {
@@ -36,8 +37,8 @@ for (const mobile of [false, true])
     await expect(
       page.getByRole("button", { name: "4 路", exact: true })
     ).toHaveAttribute("aria-pressed", "true")
-    await expect(page.getByLabel("窗口 1 通道", { exact: true })).toHaveValue(
-      "101"
+    await expect(page.getByLabel("窗口 1 通道", { exact: true })).toContainText(
+      "摄像头 1"
     )
     for (const count of [1, 2, 4, 8, 16]) {
       await page
@@ -55,10 +56,10 @@ for (const mobile of [false, true])
     await page
       .getByRole("button", { name: "摄像头 3 301", exact: true })
       .click()
-    await expect(page.getByLabel("窗口 2 通道", { exact: true })).toHaveValue(
-      "301"
+    await expect(page.getByLabel("窗口 2 通道", { exact: true })).toContainText(
+      "摄像头 3"
     )
-    await page.getByLabel("窗口 2 通道", { exact: true }).selectOption("401")
+    await selectOption(page, "窗口 2 通道", "摄像头 4")
     expect(mediaRequests).toEqual([])
   })
 for (const codec of ["h264", "hevc"] as const)
@@ -124,7 +125,7 @@ for (const codec of ["h264", "hevc"] as const)
       )
       .toBeGreaterThan(3)
     expect(bodies).toEqual([{ track: "101" }])
-    await page.getByLabel("窗口 1 通道", { exact: true }).selectOption("201")
+    await selectOption(page, "窗口 1 通道", "摄像头 2")
     await expect.poll(() => deleted.length).toBe(1)
     await expect(page.locator("video")).toHaveCount(0)
     await page
@@ -205,9 +206,9 @@ test("live start failure can retry and preparation can cancel", async ({
 test("channel failure retries; empty channels disable playback", async ({
   page,
 }) => {
-  let attempt = 0
+  let retry = false
   await page.route("**/api/channels", (route) =>
-    ++attempt === 1
+    !retry
       ? route.fulfill({
           status: 502,
           json: {
@@ -224,6 +225,7 @@ test("channel failure retries; empty channels disable playback", async ({
   )
   await page.goto("/")
   await expect(page.getByText("通道读取失败")).toBeVisible()
+  retry = true
   await page.getByRole("button", { name: "刷新通道" }).click()
   await expect(page.getByText("暂无通道")).toBeVisible()
   for (const button of await page
@@ -365,7 +367,7 @@ for (const mobile of [false, true])
     })
     try {
       await page.goto("/")
-      await page.getByLabel("窗口 4 通道", { exact: true }).selectOption("")
+      await selectOption(page, "窗口 4 通道", "选择通道")
       expect(tracks).toEqual([])
       const first = page.getByRole("region", { name: "窗口 1", exact: true })
       await first.getByRole("button", { name: "开始预览" }).click()

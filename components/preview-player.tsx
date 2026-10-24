@@ -10,7 +10,6 @@ import {
 } from "react"
 import { PlayIcon, RefreshCwIcon, XIcon, VideoIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -23,57 +22,127 @@ import {
   errorSchema,
   liveSchema,
   previewSchema,
+  playbackStatusSchema,
   type Preview,
   type LiveStream,
 } from "@/shared/contracts"
-import { HlsVideo } from "@/components/hls-video"
+import { HlsVideo, type PlaybackPreferences } from "@/components/hls-video"
 import { VideoWall } from "@/components/video-wall"
 
 function release(id: string) {
-  void fetch(`/api/streams/${id}`, { method: "DELETE", keepalive: true }).catch(
-    () => {}
-  )
+  return fetch(`/api/streams/${id}`, {
+    method: "DELETE",
+    keepalive: true,
+    signal: AbortSignal.timeout(8000),
+  })
+    .then((response) => response.ok)
+    .catch(() => false)
 }
 type Source =
   | { track: string; date: string; segmentId: string; live?: false }
   | { track: string; live: true }
 
 export type StreamPlayerHandle = { start: () => void }
+type PlaybackOptions = {
+  autoStart?: boolean
+  initialPreferences?: PlaybackPreferences
+  onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
+  onPlaybackEnded?: () => void
+  onStop?: () => void
+}
 
-export function PreviewPlayer(props: {
-  track: string
-  date: string
-  segmentId: string
-}) {
+export function PreviewPlayer(
+  props: {
+    track: string
+    date: string
+    segmentId: string
+  } & PlaybackOptions
+) {
   return (
-    <VideoWall
-      count={1}
-      label="录像预览窗口"
-      renderWindow={() => <StreamPlayer {...props} />}
-    />
+    <div className="playback-player">
+      <VideoWall
+        count={1}
+        label="录像预览窗口"
+        renderWindow={() => (
+          <section className="live-window" aria-label="录像回放窗口">
+            <div className="window-heading">
+              <h3>录像回放</h3>
+            </div>
+            <StreamPlayer {...props} />
+          </section>
+        )}
+      />
+    </div>
   )
 }
 
 export function StreamPlayer({
   ref,
   ...props
-}: Source & { ref?: Ref<StreamPlayerHandle> }) {
+}: Source & PlaybackOptions & { ref?: Ref<StreamPlayerHandle> }) {
   const { track, live = false } = props
   const request = useRef<AbortController | null>(null)
   const activeId = useRef<string | null>(null)
+  const ending = useRef<AbortController | null>(null)
+  const callbacks = useRef(props)
+  useEffect(() => {
+    callbacks.current = props
+  })
   const [session, setSession] = useState<Preview | LiveStream>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-  const [ready, setReady] = useState(false)
   const [expired, setExpired] = useState(false)
   const onError = useCallback((message: string) => {
+    ending.current?.abort()
+    ending.current = null
     setError(message)
     if (activeId.current) release(activeId.current)
     activeId.current = null
+    setSession(undefined)
+    callbacks.current.onStop?.()
   }, [])
+  useEffect(() => {
+    if (live || !session) return
+    const controller = new AbortController()
+    let pending = false
+    const timer = setInterval(() => {
+      if (pending) return
+      pending = true
+      void fetch(`/api/streams/${session.id}/status`, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+      })
+        .then(async (response) => {
+          const body: unknown = await response.json()
+          if (response.ok && playbackStatusSchema.safeParse(body).success)
+            return
+          const error = errorSchema.safeParse(body)
+          throw new Error(
+            error.success
+              ? error.data.error.message
+              : "回放连接中断，请重新播放。"
+          )
+        })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted)
+            onError(
+              error instanceof Error
+                ? error.message
+                : "回放连接中断，请重新播放。"
+            )
+        })
+        .finally(() => {
+          pending = false
+        })
+    }, 20_000)
+    return () => {
+      clearInterval(timer)
+      controller.abort()
+    }
+  }, [live, session, onError])
   useEffect(() => {
     const cleanup = () => {
       request.current?.abort()
+      ending.current?.abort()
       if (activeId.current) release(activeId.current)
       activeId.current = null
     }
@@ -98,18 +167,21 @@ export function StreamPlayer({
     )
     return () => clearTimeout(timer)
   }, [session, live])
-  function close() {
+  const close = useCallback(() => {
     request.current?.abort()
+    ending.current?.abort()
+    ending.current = null
     request.current = null
     if (activeId.current) release(activeId.current)
     activeId.current = null
     setSession(undefined)
     setLoading(false)
-    setReady(false)
     setExpired(false)
     setError("")
-  }
-  async function prepare() {
+  }, [])
+  const sourceDate = props.live ? undefined : props.date
+  const sourceSegment = props.live ? undefined : props.segmentId
+  const prepare = useCallback(async () => {
     close()
     const controller = new AbortController()
     request.current = controller
@@ -121,11 +193,14 @@ export function StreamPlayer({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
-            props.live
+            live
               ? { track }
-              : { track, date: props.date, segmentId: props.segmentId }
+              : { track, date: sourceDate, segmentId: sourceSegment }
           ),
-          signal: controller.signal,
+          signal: AbortSignal.any([
+            controller.signal,
+            AbortSignal.timeout(live ? 25_000 : 35_000),
+          ]),
         }
       )
       const body: unknown = await response.json()
@@ -144,15 +219,66 @@ export function StreamPlayer({
       activeId.current = parsed.data.id
       setSession(parsed.data)
     } catch (error) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted) {
         setError(
-          error instanceof Error ? error.message : "预览准备失败，请重试。"
+          error instanceof DOMException && error.name === "TimeoutError"
+            ? "准备预览超时，请重试。"
+            : error instanceof Error
+              ? error.message
+              : "预览准备失败，请重试。"
         )
+        callbacks.current.onStop?.()
+      }
     } finally {
       if (request.current === controller) {
         request.current = null
         setLoading(false)
       }
+    }
+  }, [close, live, track, sourceDate, sourceSegment])
+  useEffect(() => {
+    if (!props.autoStart || live) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) void prepare()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [props.autoStart, live, prepare])
+  async function finishPlayback() {
+    const id = activeId.current
+    if (live || !id || ending.current || !callbacks.current.onPlaybackEnded)
+      return
+    const controller = new AbortController()
+    ending.current = controller
+    try {
+      const response = await fetch(`/api/streams/${id}/status`, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+      })
+      const body: unknown = await response.json()
+      if (controller.signal.aborted || activeId.current !== id) return
+      const parsed = playbackStatusSchema.safeParse(body)
+      if (!response.ok || !parsed.success)
+        throw new Error("无法确认录像读取状态，请重新播放。")
+      if (!parsed.data.complete) {
+        setError("录像尚未读取完成，请稍后继续播放。")
+        return
+      }
+      if (!callbacks.current.onPlaybackEnded) return
+      const released = await release(id)
+      if (controller.signal.aborted || activeId.current !== id) return
+      if (!released) throw new Error("无法关闭上一段录像，请重试。")
+      activeId.current = null
+      setSession(undefined)
+      callbacks.current.onPlaybackEnded?.()
+    } catch (error) {
+      if (!controller.signal.aborted)
+        onError(
+          error instanceof Error ? error.message : "回放连接中断，请重试。"
+        )
+    } finally {
+      if (ending.current === controller) ending.current = null
     }
   }
   useImperativeHandle(ref, () => ({
@@ -163,68 +289,51 @@ export function StreamPlayer({
   const startLabel = session
     ? live
       ? "重新连接"
-      : "重新打开预览"
+      : "重新播放"
     : live
       ? "开始预览"
-      : "播放文件开头"
-  const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭预览"
+      : "播放"
+  const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
     <div className="preview-actions">
       {!loading && (
         <Button
-          size={live ? "sm" : "default"}
+          size="sm"
           disabled={!track}
           aria-label={startLabel}
           title={startLabel}
           onClick={() => void prepare()}
         >
-          {live && session ? (
+          {session ? (
             <RefreshCwIcon data-icon="inline-start" />
           ) : (
             <PlayIcon data-icon="inline-start" />
           )}
-          <span className={live ? "control-label" : undefined}>
-            {startLabel}
-          </span>
+          <span className="control-label">{startLabel}</span>
         </Button>
       )}
       {(loading || session) && (
         <Button
-          size={live ? "sm" : "default"}
+          size="sm"
           variant="outline"
           aria-label={stopLabel}
           title={stopLabel}
-          onClick={close}
+          onClick={() => {
+            close()
+            props.onStop?.()
+          }}
         >
           <XIcon data-icon="inline-start" />
-          <span className={live ? "control-label" : undefined}>
-            {stopLabel}
-          </span>
+          <span className="control-label">{stopLabel}</span>
         </Button>
       )}
     </div>
   )
   return (
     <section
-      className={live ? "stream-player" : "preview-panel"}
+      className="stream-player"
       aria-label={live ? "实时播放器" : "录像预览"}
     >
-      {!live && (
-        <>
-          <div className="preview-toolbar">
-            <div>
-              <h3>片段预览</h3>
-              <p>
-                播放录像文件开头最多 30 秒，可在预览内暂停和跳转。暂不提供音频。
-              </p>
-            </div>
-            <Badge variant="secondary">本机解码</Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            文件起点与时间轴时刻的对应关系仍待核对。
-          </p>
-        </>
-      )}
       {error && (
         <Alert variant="destructive">
           <AlertTitle>预览未完成</AlertTitle>
@@ -232,49 +341,40 @@ export function StreamPlayer({
         </Alert>
       )}
       {session ? (
-        <>
-          <HlsVideo
-            session={session}
-            live={live}
-            onReady={() => setReady(true)}
-            onError={onError}
-            actions={live ? actions : undefined}
-          />
-          {!live && (
-            <p className="text-sm text-muted-foreground">
-              实际编码：
-              {session.codec === "hevc" ? "H.265 / HEVC" : "H.264 / AVC"}
-              ，由本机浏览器解码。
-            </p>
-          )}
-          {!live && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {expired
-                ? "会话已到期，已缓冲内容可继续播放；重新打开可再次加载。"
-                : ready
-                  ? `预览已就绪 · ${"durationSeconds" in session ? Math.round(session.durationSeconds) : 0} 秒，请点击视频播放`
-                  : "正在加载本机播放器…"}
-            </p>
-          )}
-        </>
+        <HlsVideo
+          key={session.id}
+          session={session}
+          live={live}
+          onError={onError}
+          actions={actions}
+          initialPreferences={props.initialPreferences}
+          onPreferencesChange={props.onPreferencesChange}
+          onEnded={() => void finishPlayback()}
+        />
       ) : (
-        live && (
-          <Empty className="stream-idle">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <VideoIcon />
-              </EmptyMedia>
-              <EmptyTitle>{loading ? "正在连接通道" : "画面未开启"}</EmptyTitle>
+        <Empty className="stream-idle">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <VideoIcon />
+            </EmptyMedia>
+            <EmptyTitle>
+              {loading
+                ? live
+                  ? "正在连接通道"
+                  : "正在准备录像"
+                : "画面未开启"}
+            </EmptyTitle>
+            {live && (
               <EmptyDescription>
                 {expired
                   ? "本次会话已到期，请重新开始预览。"
                   : "选择通道后，手动开始预览"}
               </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )
+            )}
+          </EmptyHeader>
+        </Empty>
       )}
-      {(!live || !session) && (
+      {!session && (
         <div className="preview-control-row">
           {loading && (
             <p role="status" className="truncate" title="正在准备预览，请稍候…">

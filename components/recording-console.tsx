@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import {
   ArchiveIcon,
   CircleAlertIcon,
@@ -10,9 +10,18 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { RecordingDatePicker } from "@/components/recording-date-picker"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -34,6 +43,7 @@ import { getJson } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { PreviewPlayer } from "@/components/preview-player"
 import { ConsoleNav } from "@/components/console-nav"
+import type { PlaybackPreferences } from "@/components/hls-video"
 
 function clock(iso: string, timeZone: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -54,6 +64,11 @@ function duration(ms: number) {
       ? `${minutes} 分 ${seconds % 60} 秒`
       : `${seconds} 秒`
 }
+function segmentEnd(iso: string, data: Recordings) {
+  return Date.parse(iso) === Date.parse(data.range.endAt)
+    ? "24:00:00"
+    : clock(iso, data.timeZone)
+}
 type Resource = { channels: Channel[]; timeZone: string; today: string }
 type QueryResult = { key: string; data?: Recordings; error?: string }
 
@@ -68,6 +83,19 @@ export function RecordingConsole() {
   const [result, setResult] = useState<QueryResult>()
   const [selected, setSelected] = useState("")
   const [zoom, setZoom] = useState("1")
+  const [continuous, setContinuous] = useState(false)
+  const [automatic, setAutomatic] = useState("")
+  const [sequenceNotice, setSequenceNotice] = useState("")
+  const [preferences, setPreferences] = useState<PlaybackPreferences>({
+    rate: 1,
+    sound: false,
+  })
+  const updatePreferences = useCallback(
+    (value: Partial<PlaybackPreferences>) => {
+      setPreferences((old) => ({ ...old, ...value }))
+    },
+    []
+  )
   const key = `${track}|${date}|${refresh}`
   const data = result?.key === key ? result.data : undefined
   const error = result?.key === key ? result.error : undefined
@@ -112,6 +140,9 @@ export function RecordingConsole() {
       .then((data) => {
         setResult({ key, data })
         setSelected("")
+        setAutomatic("")
+        setContinuous(false)
+        setSequenceNotice("")
       })
       .catch((error: Error) => {
         if (!controller.signal.aborted) setResult({ key, error: error.message })
@@ -123,6 +154,37 @@ export function RecordingConsole() {
     (channel) => channel.id === track
   )
   const segment = data?.segments.find((segment) => segment.id === selected)
+  function selectSegment(id: string) {
+    setAutomatic("")
+    setSequenceNotice("")
+    setSelected(id)
+  }
+  function stopSequence() {
+    setAutomatic("")
+    setContinuous(false)
+    setSequenceNotice("")
+  }
+  function nextSegment() {
+    if (!continuous || !data || !segment) return
+    const next =
+      data.segments[
+        data.segments.findIndex((item) => item.id === segment.id) + 1
+      ]
+    if (!next) {
+      setAutomatic("")
+      setContinuous(false)
+      setSequenceNotice("已播放到当日最后一个片段。")
+      return
+    }
+    const gap = Date.parse(next.startAt) - Date.parse(segment.endAt)
+    setSequenceNotice(
+      gap > 1000
+        ? `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
+        : "已切换到下一片段。"
+    )
+    setAutomatic(next.id)
+    setSelected(next.id)
+  }
   const coverage =
     data?.coverage.reduce(
       (sum, item) => sum + Date.parse(item.endAt) - Date.parse(item.startAt),
@@ -165,32 +227,38 @@ export function RecordingConsole() {
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="track">录像轨道</FieldLabel>
-                <NativeSelect
-                  id="track"
+                <Select
+                  items={
+                    resources?.channels.map((channel) => ({
+                      label: channel.name,
+                      value: channel.id,
+                    })) ?? []
+                  }
                   value={track}
-                  onChange={(event) => setTrack(event.target.value)}
+                  onValueChange={(value) => setTrack(value ?? "")}
                   disabled={!resources?.channels.length}
                 >
-                  {!resources?.channels.length && (
-                    <NativeSelectOption value="">
-                      暂无可用轨道
-                    </NativeSelectOption>
-                  )}
-                  {resources?.channels.map((channel) => (
-                    <NativeSelectOption key={channel.id} value={channel.id}>
-                      {channel.name}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
+                  <SelectTrigger id="track" className="w-full">
+                    <SelectValue placeholder="暂无可用轨道" />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {resources?.channels.map((channel) => (
+                        <SelectItem key={channel.id} value={channel.id}>
+                          {channel.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </Field>
               <Field data-invalid={!!date && !validDate}>
                 <FieldLabel htmlFor="date">设备日期</FieldLabel>
-                <Input
+                <RecordingDatePicker
                   id="date"
-                  type="date"
                   value={date}
-                  aria-invalid={!!date && !validDate}
-                  onChange={(event) => setDate(event.target.value)}
+                  timeZone={resources?.timeZone ?? "Asia/Shanghai"}
+                  onChange={setDate}
                   disabled={!resources}
                 />
               </Field>
@@ -287,44 +355,30 @@ export function RecordingConsole() {
                 ) : null}
                 {data && (
                   <>
-                    {data.warnings.includes("FUTURE_RECORDING_TIME") && (
-                      <Alert>
-                        <CircleAlertIcon />
-                        <AlertTitle>录像时间需要核对</AlertTitle>
-                        <AlertDescription>
-                          设备返回了晚于当前时间的录像时间戳。当前按接口的 UTC
-                          标记显示，固件时间语义尚待验证。
-                        </AlertDescription>
-                      </Alert>
-                    )}
                     <div className="timeline-toolbar">
                       <h3>全天时间轴</h3>
                       <div className="flex items-center gap-3">
                         <span className="timeline-legend">有录像</span>
-                        <label className="sr-only" htmlFor="zoom">
-                          时间轴缩放
-                        </label>
-                        <NativeSelect
-                          id="zoom"
-                          value={zoom}
-                          onChange={(event) => setZoom(event.target.value)}
+                        <ToggleGroup
+                          aria-label="时间轴缩放"
+                          value={[zoom]}
+                          onValueChange={(values) => {
+                            if (values[0]) setZoom(values[0])
+                          }}
+                          variant="outline"
+                          size="sm"
+                          spacing={0}
                         >
-                          <NativeSelectOption value="1">
-                            全天
-                          </NativeSelectOption>
-                          <NativeSelectOption value="2">
-                            2 倍
-                          </NativeSelectOption>
-                          <NativeSelectOption value="4">
-                            4 倍
-                          </NativeSelectOption>
-                        </NativeSelect>
+                          <ToggleGroupItem value="1">全天</ToggleGroupItem>
+                          <ToggleGroupItem value="2">2 倍</ToggleGroupItem>
+                          <ToggleGroupItem value="4">4 倍</ToggleGroupItem>
+                        </ToggleGroup>
                       </div>
                     </div>
                     <RecordingTimeline
                       data={data}
                       selected={selected}
-                      onSelect={setSelected}
+                      onSelect={selectSegment}
                       zoom={Number(zoom)}
                     />
                     <div className="coverage-summary">
@@ -335,19 +389,12 @@ export function RecordingConsole() {
                         未覆盖区间 <strong>{data.gaps.length} 个</strong>
                       </span>
                     </div>
-                    <Alert>
-                      <CircleAlertIcon />
-                      <AlertTitle>历史文件预览</AlertTitle>
-                      <AlertDescription>
-                        选择片段后可预览文件开头。全天任意时刻回放与精确时间定位仍待验证。
-                      </AlertDescription>
-                    </Alert>
                     {segment && (
                       <div className="selected-segment" role="status">
                         <span>已选片段</span>
                         <strong>
                           {clock(segment.startAt, data.timeZone)} —{" "}
-                          {clock(segment.endAt, data.timeZone)}
+                          {segmentEnd(segment.endAt, data)}
                         </strong>
                         <span>
                           设备报告：{segment.codec ?? "编码未提供"}
@@ -356,11 +403,43 @@ export function RecordingConsole() {
                       </div>
                     )}
                     {segment && (
+                      <FieldGroup>
+                        <Field orientation="horizontal">
+                          <Switch
+                            id="continuous-playback"
+                            aria-label="连续播放"
+                            checked={continuous}
+                            onCheckedChange={(checked) => {
+                              setContinuous(checked)
+                              if (!checked) setAutomatic("")
+                              setSequenceNotice("")
+                            }}
+                          />
+                          <FieldLabel htmlFor="continuous-playback">
+                            连续播放下一片段
+                          </FieldLabel>
+                        </Field>
+                      </FieldGroup>
+                    )}
+                    {sequenceNotice && (
+                      <p
+                        role="status"
+                        className="text-sm text-muted-foreground"
+                      >
+                        {sequenceNotice}
+                      </p>
+                    )}
+                    {segment && (
                       <PreviewPlayer
                         key={`${key}|${segment.id}`}
                         track={track}
                         date={date}
                         segmentId={segment.id}
+                        autoStart={automatic === segment.id}
+                        initialPreferences={preferences}
+                        onPreferencesChange={updatePreferences}
+                        onPlaybackEnded={continuous ? nextSegment : undefined}
+                        onStop={stopSequence}
                       />
                     )}
                     {!data.segments.length ? (
@@ -384,14 +463,17 @@ export function RecordingConsole() {
                         <ol>
                           {data.segments.map((item, index) => (
                             <li key={item.id}>
-                              <button
+                              <Button
                                 type="button"
+                                variant={
+                                  selected === item.id ? "secondary" : "ghost"
+                                }
                                 aria-pressed={selected === item.id}
                                 className={cn(
                                   "segment-row",
                                   selected === item.id && "is-selected"
                                 )}
-                                onClick={() => setSelected(item.id)}
+                                onClick={() => selectSegment(item.id)}
                               >
                                 <span className="segment-index">
                                   {String(index + 1).padStart(2, "0")}
@@ -402,7 +484,7 @@ export function RecordingConsole() {
                                     {" "}
                                     —{" "}
                                   </span>
-                                  {clock(item.endAt, data.timeZone)}
+                                  {segmentEnd(item.endAt, data)}
                                 </span>
                                 <span className="segment-duration">
                                   {duration(
@@ -413,7 +495,7 @@ export function RecordingConsole() {
                                 <span className="segment-codec">
                                   {item.codec ?? "未知编码"}
                                 </span>
-                              </button>
+                              </Button>
                             </li>
                           ))}
                         </ol>
@@ -425,9 +507,7 @@ export function RecordingConsole() {
             )}
           </section>
         </div>
-        <footer className="console-footer">
-          {/* 待定 */}
-        </footer>
+        <footer className="console-footer">{/* 待定 */}</footer>
       </main>
     </div>
   )
@@ -487,8 +567,9 @@ function RecordingTimeline({
             const a = Math.max(start, Date.parse(segment.startAt)),
               b = Math.min(start + total, Date.parse(segment.endAt))
             return (
-              <button
+              <Button
                 type="button"
+                variant="recording"
                 key={segment.id}
                 className={cn(
                   "timeline-segment",
@@ -498,9 +579,9 @@ function RecordingTimeline({
                   left: `${((a - start) / total) * 100}%`,
                   width: `${((b - a) / total) * 100}%`,
                 }}
-                aria-label={`片段 ${index + 1}，${clock(segment.startAt, data.timeZone)} 至 ${clock(segment.endAt, data.timeZone)}`}
+                aria-label={`片段 ${index + 1}，${clock(segment.startAt, data.timeZone)} 至 ${segmentEnd(segment.endAt, data)}`}
                 aria-pressed={selected === segment.id}
-                title={`${clock(segment.startAt, data.timeZone)} — ${clock(segment.endAt, data.timeZone)}`}
+                title={`${clock(segment.startAt, data.timeZone)} — ${segmentEnd(segment.endAt, data)}`}
                 onClick={() => onSelect(segment.id)}
               />
             )

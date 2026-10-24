@@ -1,6 +1,31 @@
 import { Temporal } from "@js-temporal/polyfill"
 import type { Interval } from "../shared/contracts"
 
+export type RecordingTimeOptions = {
+  timeZone: string
+  mode: "device-local" | "utc"
+}
+
+/** Serialize an instant for the NVR's recording search, never for the API. */
+export function recordingSearchTime(
+  iso: string,
+  options: RecordingTimeOptions
+) {
+  const instant = Temporal.Instant.from(iso)
+  if (options.mode === "utc") return instant.toString()
+  return `${instant.toZonedDateTimeISO(options.timeZone).toPlainDateTime().toString({ smallestUnit: "second" })}Z`
+}
+
+/** Only the legacy Z convention needs reinterpretation; explicit offsets win. */
+export function recordingInstant(iso: string, options?: RecordingTimeOptions) {
+  if (options?.mode === "device-local" && iso.endsWith("Z"))
+    return Temporal.PlainDateTime.from(iso.slice(0, -1))
+      .toZonedDateTime(options.timeZone, { disambiguation: "reject" })
+      .toInstant()
+      .toString({ smallestUnit: "millisecond" })
+  return Temporal.Instant.from(iso).toString({ smallestUnit: "millisecond" })
+}
+
 export function dayRange(date: string, timeZone: string): Interval {
   const day = Temporal.PlainDate.from(date)
   const start = day.toZonedDateTime(timeZone)

@@ -7,7 +7,7 @@ import {
   previewSchema,
 } from "../shared/contracts"
 import { LiveSessions } from "./live"
-import { PreviewSessions } from "./preview"
+import { PlaybackSessions } from "./playback"
 import {
   channelsSchema,
   deviceSchema,
@@ -21,7 +21,10 @@ import { todayIn } from "./time"
 
 export function createApp(
   getService: () => NvrService = defaultService,
-  previews = new PreviewSessions(),
+  previews: Pick<
+    PlaybackSessions,
+    "create" | "playlist" | "status" | "asset" | "delete" | "audio"
+  > = new PlaybackSessions(),
   live = new LiveSessions()
 ) {
   const app = new Hono().basePath("/api")
@@ -156,7 +159,7 @@ export function createApp(
       )
     }
   )
-  app.get("/streams/:id/:asset", (c) => {
+  app.get("/streams/:id/:asset", async (c) => {
     const id = c.req.param("id"),
       asset = c.req.param("asset")
     if (live.has(id)) {
@@ -175,21 +178,30 @@ export function createApp(
           asset === "init.mp4" ? "video/mp4" : "video/iso.segment",
       })
     }
+    if (asset === "status") return c.json(previews.status(id))
+    if (asset === "audio") {
+      const after = c.req.query("after") ?? "-1",
+        at = c.req.query("at") ?? "0"
+      if (
+        !/^(?:-1|0|[1-9]\d{0,9})$/.test(after) ||
+        !/^\d{1,5}(?:\.\d{1,6})?$/.test(at) ||
+        Number(at) > 86400
+      )
+        throw new AppError("INVALID_QUERY", 400, "音频定位参数无效。")
+      return c.json(await previews.audio(id, Number(after), Number(at)))
+    }
     if (asset === "index.m3u8")
       return c.body(previews.playlist(id), 200, {
         "Content-Type": "application/vnd.apple.mpegurl",
       })
-    if (asset !== "init.mp4" && asset !== "segment.m4s")
-      throw new AppError("MEDIA_NOT_FOUND", 404, "媒体资源不存在。")
-    const media = previews.get(id),
-      data = asset === "init.mp4" ? media.init : media.media
+    const data = await previews.asset(id, asset)
     return c.body(new Uint8Array(data), 200, {
       "Content-Type": asset === "init.mp4" ? "video/mp4" : "video/iso.segment",
     })
   })
-  app.delete("/streams/:id", (c) => {
+  app.delete("/streams/:id", async (c) => {
     live.delete(c.req.param("id"))
-    previews.delete(c.req.param("id"))
+    await previews.delete(c.req.param("id"))
     return c.body(null, 204)
   })
   app.notFound((c) =>
