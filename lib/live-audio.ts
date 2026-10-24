@@ -1,6 +1,12 @@
-import { liveAudioSchema } from "@/shared/contracts"
-import { getJson } from "@/lib/api"
+import type { z } from "zod"
+import type { liveAudioSchema } from "@/shared/contracts"
 import { decodeG711 } from "@/lib/g711"
+
+export type AudioLoader = (request: {
+  after: number
+  at?: number
+  signal: AbortSignal
+}) => Promise<z.infer<typeof liveAudioSchema>>
 
 type Block = { start: number; buffer: AudioBuffer; scheduled: boolean }
 export class LocalLiveAudio {
@@ -39,7 +45,7 @@ export class LocalLiveAudio {
   }
   constructor(
     private video: HTMLVideoElement,
-    private id: string,
+    private loadAudio: AudioLoader,
     private ptsOffset: () => number | undefined,
     private onError: (message: string) => void,
     private playback = false
@@ -65,11 +71,11 @@ export class LocalLiveAudio {
     this.polling = true
     const revision = this.revision
     try {
-      const result = await getJson(
-        `/api/streams/${this.id}/audio?after=${this.cursor}${this.playback ? `&at=${Math.max(0, this.video.currentTime).toFixed(3)}` : ""}`,
-        liveAudioSchema,
-        this.controller.signal
-      )
+      const result = await this.loadAudio({
+        after: this.cursor,
+        at: this.playback ? this.video.currentTime : undefined,
+        signal: this.controller.signal,
+      })
       if (this.closed) return
       if (revision !== this.revision) return
       if (result.status === "unsupported")

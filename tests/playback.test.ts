@@ -25,6 +25,7 @@ const source: RawSegment = {
   startAt: "2026-10-16T16:00:00Z",
   endAt: "2026-10-16T17:00:00Z",
   playbackURI: "rtsp://nvr.test/Streaming/tracks/101/?name=synthetic&size=123",
+  estimatedDurationSeconds: 3600,
 }
 const media = splitFragmentedMp4(
   readFileSync(new URL("../fixtures/synthetic-preview.mp4", import.meta.url))
@@ -95,30 +96,55 @@ describe("full recording playback", () => {
     expect(args.join(" ")).not.toMatch(/libx26| -vf | -filter/)
   })
   it("starts before EOF, preserves every fragment beyond 30 seconds, and securely releases files", async () => {
+    let advance!: () => void
     let finish!: () => void
+    const firstGate = new Promise<void>((resolve) => {
+      advance = resolve
+    })
     const gate = new Promise<void>((resolve) => {
       finish = resolve
     })
-    const { sessions, root } = await setup(async function* () {
-      yield media
-      await gate
-      for (let i = 0; i < 14; i++) yield media
-    })
+    const { sessions, root } = await setup(
+      async function* (_uri, _config, signal) {
+        yield media
+        await Promise.race([firstGate, waitForAbort(signal)])
+        yield media
+        await Promise.race([gate, waitForAbort(signal)])
+        for (let i = 0; i < 13; i++) yield media
+      }
+    )
     const session = await sessions.create(config, resolve, signal())
+    expect(session.durationSeconds).toBe(3)
+    expect(session.estimatedDurationSeconds).toBe(3600)
+    expect(session).not.toHaveProperty("totalDurationSeconds")
     expect(sessions.status(session.id)).toEqual({
       complete: false,
       durationSeconds: 3,
+      estimatedDurationSeconds: 3600,
     })
     expect(sessions.playlist(session.id)).not.toContain("ENDLIST")
     expect((await stat(join(root, session.id))).mode & 0o777).toBe(0o700)
     expect((await stat(join(root, session.id, "0.m4s"))).mode & 0o777).toBe(
       0o600
     )
+    advance()
+    await vi.waitFor(() =>
+      expect(sessions.status(session.id)).toEqual({
+        complete: false,
+        durationSeconds: 6,
+        estimatedDurationSeconds: 3600,
+      })
+    )
     finish()
     await vi.waitFor(() =>
       expect(sessions.status(session.id).complete).toBe(true)
     )
-    expect(sessions.status(session.id).durationSeconds).toBe(45)
+    expect(sessions.status(session.id)).toEqual({
+      complete: true,
+      durationSeconds: 45,
+      estimatedDurationSeconds: 3600,
+      totalDurationSeconds: 45,
+    })
     expect(sessions.playlist(session.id)).toContain("#EXT-X-ENDLIST")
     expect((sessions.playlist(session.id).match(/#EXTINF/g) ?? []).length).toBe(
       15
@@ -130,6 +156,30 @@ describe("full recording playback", () => {
     await sessions.delete(session.id)
     expect(await readdir(root)).toEqual([])
     expect(() => sessions.status(session.id)).toThrow()
+  })
+  it("starts playback without a trusted duration estimate instead of using a clipped search span", async () => {
+    const { sessions, root } = await setup(
+      async function* (_uri, _config, signal) {
+        yield media
+        await waitForAbort(signal)
+      }
+    )
+    const unestimated = { ...source }
+    delete unestimated.estimatedDurationSeconds
+    const session = await sessions.create(
+      config,
+      async () => unestimated,
+      signal()
+    )
+    expect(session.durationSeconds).toBe(3)
+    expect(session).not.toHaveProperty("estimatedDurationSeconds")
+    expect(session).not.toHaveProperty("totalDurationSeconds")
+    expect(sessions.status(session.id)).toEqual({
+      complete: false,
+      durationSeconds: 3,
+    })
+    await sessions.delete(session.id)
+    expect(await readdir(root)).toEqual([])
   })
   it("bounds concurrency and cancels the producer, including during preparation", async () => {
     let cancelled = 0

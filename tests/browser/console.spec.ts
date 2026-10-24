@@ -78,6 +78,21 @@ for (const mobile of [false, true]) {
     })
     await page.goto("/playback")
     await expect(page.getByText("1 个录像片段")).toBeVisible()
+    const listToggle = page.getByRole("button", {
+      name: "片段列表",
+      exact: true,
+    })
+    await expect(listToggle).toHaveAttribute("aria-expanded", "false")
+    await expect(page.locator(".segment-row")).toHaveCount(0)
+    await listToggle.focus()
+    await page.keyboard.press("Enter")
+    const listItem = page.getByRole("button", {
+      name: "选择片段 1，00:00:00 至 01:00:00",
+      exact: true,
+    })
+    await listItem.focus()
+    await page.keyboard.press("Enter")
+    await expect(listItem).toHaveAttribute("aria-pressed", "true")
     const bar = page.getByRole("button", {
       name: "片段 1，00:00:00 至 01:00:00",
       exact: true,
@@ -97,9 +112,33 @@ for (const mobile of [false, true]) {
         .locator(".timeline-chart")
         .evaluate((el) => el.getBoundingClientRect().width)
     ).toBeGreaterThan(oldWidth)
-    await selectOption(page, "录像轨道", "轨道 201")
+    const timeline = page.getByRole("region", {
+      name: "全天录像时间轴，可横向滚动",
+      exact: true,
+    })
+    await expect(timeline).toHaveAttribute("data-slot", "scroll-area-viewport")
+    await expect(timeline).toHaveAttribute("tabindex", "0")
+    expect(
+      await timeline.evaluate(
+        (element) => element.scrollWidth > element.clientWidth
+      )
+    ).toBe(true)
+    await timeline.evaluate((element) => {
+      element.scrollLeft = 0
+    })
+    await timeline.focus()
+    await page.keyboard.press("ArrowRight")
+    await expect
+      .poll(() => timeline.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(0)
+    await expect(
+      page.locator(
+        '.timeline-scroll-area [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"]'
+      )
+    ).toBeVisible()
+    await selectOption(page, "摄像头", "轨道 201")
     await expect(page.getByText("这一天没有检索到录像")).toBeVisible()
-    await selectOption(page, "录像轨道", "轨道 101")
+    await selectOption(page, "摄像头", "轨道 101")
     await expect(page.getByText("1 个录像片段")).toBeVisible()
     await selectDate(page, "2026-10-15")
     await expect(page.getByText("设备查询超时。")).toBeVisible()
@@ -123,15 +162,142 @@ for (const mobile of [false, true]) {
 }
 
 test("device disconnect has a retryable error", async ({ page }) => {
-  await page.route("**/api/**", (route) =>
+  let reachable = false
+  await page.route("**/api/**", (route) => {
+    if (!reachable)
+      return route.fulfill({
+        status: 502,
+        json: { error: { code: "NVR_UNREACHABLE", message: "无法连接设备。" } },
+      })
+    return route.fulfill({
+      json:
+        new URL(route.request().url()).pathname === "/api/channels"
+          ? {
+              timeZone: "Asia/Shanghai",
+              today: data.date,
+              channels: [
+                { id: "101", name: "测试摄像头", configuredEnabled: true },
+              ],
+            }
+          : data,
+    })
+  })
+  await page.goto("/playback")
+  await expect(page.getByText("录像查询失败")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "刷新", exact: true })
+  ).toBeEnabled()
+  reachable = true
+  await page.getByRole("button", { name: "刷新", exact: true }).click()
+  await expect(page.getByText("1 个录像片段")).toBeVisible()
+  await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
+})
+
+test("device details load on demand and failures do not block recording queries", async ({
+  page,
+}) => {
+  let deviceRequests = 0
+  let deviceReachable = false
+  await page.route("**/api/channels", (route) =>
     route.fulfill({
-      status: 502,
-      json: { error: { code: "NVR_UNREACHABLE", message: "无法连接设备。" } },
+      json: {
+        timeZone: "Asia/Shanghai",
+        today: data.date,
+        channels: [{ id: "101", name: "测试摄像头", configuredEnabled: false }],
+      },
+    })
+  )
+  await page.route("**/api/recordings?**", (route) =>
+    route.fulfill({ json: data })
+  )
+  await page.route("**/api/device", (route) => {
+    deviceRequests += 1
+    return !deviceReachable
+      ? route.fulfill({
+          status: 502,
+          json: {
+            error: { code: "NVR_UNREACHABLE", message: "设备信息暂时不可用。" },
+          },
+        })
+      : route.fulfill({ json: { model: "TEST-NVR", firmware: "TEST" } })
+  })
+  await page.goto("/playback")
+  await expect(page.getByText("1 个录像片段")).toBeVisible()
+  expect(deviceRequests).toBe(0)
+  const deviceDetails = page.getByRole("button", {
+    name: "设备信息",
+    exact: true,
+  })
+  await expect(
+    page
+      .locator(".console-header")
+      .getByRole("button", { name: "设备信息", exact: true })
+  ).toHaveCount(0)
+  await expect(
+    page
+      .locator(".query-actions")
+      .getByRole("button", { name: "设备信息", exact: true })
+  ).toBeVisible()
+  await expect(deviceDetails).toHaveText("设备信息")
+  await expect(page.getByText("北京时间", { exact: true })).toHaveCount(0)
+  await deviceDetails.click()
+  await expect(page.getByText("设备信息读取失败")).toBeVisible()
+  await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
+  // Cancelled development mounts do not mean the device has recovered.
+  const failedRequests = deviceRequests
+  deviceReachable = true
+  await page.getByRole("button", { name: "重试", exact: true }).click()
+  await expect(page.getByText("TEST-NVR")).toBeVisible()
+  await expect(
+    page.getByText("北京时间（UTC+8）", { exact: true })
+  ).toBeVisible()
+  expect(deviceRequests).toBe(failedRequests + 1)
+  await page.keyboard.press("Escape")
+  await expect(page.getByText("1 个录像片段")).toBeVisible()
+  await expect(deviceDetails).toBeFocused()
+  await deviceDetails.click()
+  await expect(page.getByText("TEST-NVR")).toBeVisible()
+  expect(deviceRequests).toBe(failedRequests + 1)
+})
+
+test("today's gap summary counts elapsed gaps and excludes future hours", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(new Date("2026-10-17T04:00:00Z"))
+  const earlier = { ...segment, endAt: "2026-10-17T02:00:00Z" }
+  const later = {
+    ...segment,
+    id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    startAt: "2026-10-17T03:00:00Z",
+    endAt: "2026-10-17T04:00:00Z",
+  }
+  await page.route("**/api/channels", (route) =>
+    route.fulfill({
+      json: {
+        timeZone: "Asia/Shanghai",
+        today: data.date,
+        channels: [{ id: "101", name: "测试摄像头", configuredEnabled: true }],
+      },
+    })
+  )
+  await page.route("**/api/recordings?**", (route) =>
+    route.fulfill({
+      json: {
+        ...data,
+        segments: [earlier, later],
+        coverage: [earlier, later],
+        gaps: [
+          { startAt: earlier.endAt, endAt: later.startAt },
+          { startAt: later.endAt, endAt: range.endAt },
+        ],
+      },
     })
   )
   await page.goto("/playback")
-  await expect(page.getByText("录像查询失败")).toBeVisible()
-  await expect(page.getByRole("button", { name: "重新查询" })).toBeEnabled()
+  const summary = page.locator(".coverage-summary")
+  await expect(summary).toContainText("11 小时 0 分")
+  await expect(summary).toContainText("缺口 1 处")
+  await expect(summary).toContainText("截至本次查询")
 })
 
 test("Beijing labels and day end ignore the browser time zone and old time notices", async ({
@@ -174,7 +340,9 @@ test("Beijing labels and day end ignore the browser time zone and old time notic
       })
     })
     await page.goto("/playback")
-    await expect(page.getByLabel("设备日期")).toContainText("2026-10-17")
+    await expect(page.getByLabel("日期", { exact: true })).toContainText(
+      "2026-10-17"
+    )
     await expect(page.getByText("录像时间需要核对")).toHaveCount(0)
     await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
     const bar = page.getByRole("button", {
@@ -189,12 +357,10 @@ test("Beijing labels and day end ignore the browser time zone and old time notic
     await expect(page.locator(".coverage-summary")).toContainText(
       "24 小时 0 分"
     )
-    await expect(page.locator(".coverage-summary")).toContainText(
-      "未覆盖区间 0 个"
-    )
+    await expect(page.locator(".coverage-summary")).not.toContainText("缺口")
     await selectDate(page, "2025-12-31")
     await expect.poll(() => requestedDates.at(-1)).toBe("2025-12-31")
-    await page.getByRole("button", { name: "设备日期", exact: true }).click()
+    await page.getByRole("button", { name: "日期", exact: true }).click()
     await expect(page.getByRole("gridcell", { selected: true })).toContainText(
       "31"
     )
@@ -208,7 +374,7 @@ test("Beijing labels and day end ignore the browser time zone and old time notic
     })
     await page.keyboard.press("Escape")
     await expect(
-      page.getByRole("button", { name: "设备日期", exact: true })
+      page.getByRole("button", { name: "日期", exact: true })
     ).toBeFocused()
   } finally {
     await context.close()
@@ -223,7 +389,7 @@ test("real LAN acceptance: track 101 / 2026-10-17", async ({ page }) => {
   const errors: string[] = []
   page.on("pageerror", (error) => errors.push(error.name))
   await page.goto("/playback")
-  await expect(page.getByLabel("设备日期")).toBeEnabled()
+  await expect(page.getByLabel("日期", { exact: true })).toBeEnabled()
   await selectDate(page, "2026-10-17")
   const response = await page.request.get(
     "/api/recordings?track=101&date=2026-10-17"
@@ -238,6 +404,7 @@ test("real LAN acceptance: track 101 / 2026-10-17", async ({ page }) => {
   await expect(page.locator(".timeline-segment")).toHaveCount(
     recordings.segments.length
   )
+  await page.getByRole("button", { name: "片段列表", exact: true }).click()
   await expect(page.locator(".segment-list li")).toHaveCount(
     recordings.segments.length
   )

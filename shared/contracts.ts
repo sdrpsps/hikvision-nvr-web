@@ -54,6 +54,8 @@ export const previewSchema = z.object({
   id: z.uuid(),
   playlistUrl: z.string().regex(/^\/api\/streams\/[a-f0-9-]{36}\/index\.m3u8$/),
   durationSeconds: z.number().finite().positive(),
+  estimatedDurationSeconds: z.number().finite().positive().optional(),
+  totalDurationSeconds: z.number().finite().positive().optional(),
   expiresAt: z.iso.datetime(),
   mode: z.literal("stream-copy"),
   codec: z.enum(["h264", "hevc"]),
@@ -62,10 +64,17 @@ export type Preview = z.infer<typeof previewSchema>
 export const playbackStatusSchema = z.object({
   complete: z.boolean(),
   durationSeconds: z.number().finite().nonnegative(),
+  estimatedDurationSeconds: z.number().finite().positive().optional(),
+  totalDurationSeconds: z.number().finite().positive().optional(),
 })
+export type PlaybackStatus = z.infer<typeof playbackStatusSchema>
 
 export const liveRequestSchema = z.strictObject({ track: trackIdSchema })
-export const liveSchema = previewSchema.omit({ durationSeconds: true })
+export const liveSchema = previewSchema.omit({
+  durationSeconds: true,
+  estimatedDurationSeconds: true,
+  totalDurationSeconds: true,
+})
 export type LiveStream = z.infer<typeof liveSchema>
 
 export const liveAudioSchema = z.object({

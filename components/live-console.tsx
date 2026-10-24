@@ -1,18 +1,18 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import {
   MonitorIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   PlayIcon,
   RefreshCwIcon,
   SquareIcon,
   VideoIcon,
 } from "lucide-react"
-import { channelsSchema, type Channel } from "@/shared/contracts"
-import { getJson } from "@/lib/api"
+import { useChannels } from "@/hooks/use-api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Empty,
   EmptyHeader,
@@ -44,23 +45,18 @@ export function LiveConsole() {
   const [layout, setLayout] = useState<WallLayout>(4)
   const [selected, setSelected] = useState(0)
   const [assignments, setAssignments] = useState<Record<number, string>>({})
-  const [channels, setChannels] = useState<Channel[]>()
-  const [error, setError] = useState("")
-  const [refresh, setRefresh] = useState(0)
+  const channelsQuery = useChannels()
+  const channels = channelsQuery.data?.channels
+  const error = channelsQuery.error?.message
   const [generation, setGeneration] = useState(0)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [activity, setActivity] = useState<Record<number, boolean>>({})
   const players = useRef(new Map<number, StreamPlayerHandle>())
-  useEffect(() => {
-    const controller = new AbortController()
-    getJson("/api/channels", channelsSchema, controller.signal)
-      .then((data) => {
-        setChannels(data.channels)
-        setError("")
-      })
-      .catch((error: Error) => {
-        if (!controller.signal.aborted) setError(error.message)
-      })
-    return () => controller.abort()
-  }, [refresh])
+  const updateActivity = useCallback((index: number, active: boolean) => {
+    setActivity((old) =>
+      old[index] === active ? old : { ...old, [index]: active }
+    )
+  }, [])
   const trackFor = (index: number) => {
     const id = assignments[index] ?? channels?.[index]?.id ?? ""
     return channels?.some((channel) => channel.id === id) ? id : ""
@@ -75,15 +71,38 @@ export function LiveConsole() {
           <span>NVR 控制台</span>
         </div>
         <ConsoleNav active="live" />
-        <Badge variant="outline">手动开启画面</Badge>
       </header>
       <main className="console-main live-main">
-        <div className="page-heading">
-          <div>
-            <h1>实时预览</h1>
-            <p>先选窗口，再选通道。点击开始预览后连接画面。</p>
+        <h1 className="sr-only">实时预览</h1>
+        <div className="console-toolbar">
+          <div className="console-toolbar-group">
+            <Button
+              variant="ghost"
+              aria-label={sidebarOpen ? "收起通道" : "展开通道"}
+              aria-expanded={sidebarOpen}
+              aria-controls="live-channels"
+              onClick={(event) => {
+                event.currentTarget.focus()
+                setSidebarOpen((open) => !open)
+              }}
+            >
+              {sidebarOpen ? (
+                <PanelLeftCloseIcon data-icon="inline-start" />
+              ) : (
+                <PanelLeftOpenIcon data-icon="inline-start" />
+              )}
+              通道
+            </Button>
+            <span className="channel-target">分配到窗口 {selected + 1}</span>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="console-toolbar-group live-toolbar-actions">
+            <WallLayoutControl
+              value={layout}
+              onChange={(value) => {
+                setLayout(value)
+                setSelected((old) => Math.min(old, value - 1))
+              }}
+            />
             <Button
               disabled={
                 !Array.from({ length: layout }, (_, index) =>
@@ -99,6 +118,12 @@ export function LiveConsole() {
             </Button>
             <Button
               variant="outline"
+              disabled={
+                !Array.from(
+                  { length: layout },
+                  (_, index) => activity[index]
+                ).some(Boolean)
+              }
               onClick={() => setGeneration((value) => value + 1)}
             >
               <SquareIcon data-icon="inline-start" />
@@ -106,84 +131,122 @@ export function LiveConsole() {
             </Button>
           </div>
         </div>
-        <div className="live-workspace">
-          <aside className="live-sidebar" aria-label="设备通道">
-            <div className="channel-heading">
-              <h2>设备通道</h2>
+        {!sidebarOpen && error && (
+          <Alert variant="destructive">
+            <AlertTitle>通道读取失败</AlertTitle>
+            <AlertDescription>
+              {error}
               <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="刷新通道"
-                onClick={() => setRefresh((value) => value + 1)}
+                variant="link"
+                onClick={() => void channelsQuery.refetch()}
               >
-                <RefreshCwIcon />
+                重新读取
               </Button>
-            </div>
-            <p className="channel-hint">分配到窗口 {selected + 1}</p>
-            {!channels && !error && (
-              <div
-                role="status"
-                aria-label="正在读取通道"
-                className="flex flex-col gap-3"
-              >
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-8 w-full" />
+            </AlertDescription>
+          </Alert>
+        )}
+        <div
+          className={cn(
+            "live-workspace",
+            !sidebarOpen && "is-sidebar-collapsed"
+          )}
+        >
+          <aside
+            id="live-channels"
+            className="live-sidebar"
+            aria-label="设备通道"
+            aria-hidden={!sidebarOpen}
+            inert={!sidebarOpen}
+          >
+            <ScrollArea
+              className="live-sidebar-scroll"
+              viewportProps={{ className: "live-sidebar-viewport" }}
+              contentProps={{ className: "live-sidebar-content" }}
+            >
+              <div className="channel-heading">
+                <h2>设备通道</h2>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="刷新通道"
+                  onClick={() => void channelsQuery.refetch()}
+                >
+                  <RefreshCwIcon />
+                </Button>
               </div>
-            )}
-            {error && (
-              <Alert variant="destructive">
-                <AlertTitle>通道读取失败</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-            {channels?.length === 0 && (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>暂无通道</EmptyTitle>
-                  <EmptyDescription>
-                    设备未返回通道，请检查连接和查询权限后刷新。
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-            <ul className="channel-list">
-              {channels?.map((channel) => (
-                <li key={channel.id}>
-                  <Button
-                    type="button"
-                    variant={
-                      trackFor(selected) === channel.id ? "secondary" : "ghost"
-                    }
-                    className="h-auto w-full justify-start py-2.5"
-                    aria-pressed={trackFor(selected) === channel.id}
-                    onClick={() =>
-                      setAssignments((old) => ({
-                        ...old,
-                        [selected]: channel.id,
-                      }))
-                    }
-                  >
-                    <VideoIcon data-icon="inline-start" aria-hidden="true" />
-                    <span className="truncate">{channel.name}</span>
-                    <span className="channel-id">{channel.id}</span>
-                  </Button>
-                </li>
-              ))}
-            </ul>
+              {!channels && !error && (
+                <div
+                  role="status"
+                  aria-label="正在读取通道"
+                  className="flex flex-col gap-3"
+                >
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              )}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertTitle>通道读取失败</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              {channels?.length === 0 && (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>暂无通道</EmptyTitle>
+                    <EmptyDescription>
+                      设备未返回通道，请检查连接和查询权限后刷新。
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+              <ScrollArea
+                className="live-channel-scroll"
+                viewportProps={{ className: "live-channel-viewport" }}
+              >
+                <ul className="channel-list">
+                  {channels?.map((channel) => (
+                    <li key={channel.id}>
+                      <Button
+                        type="button"
+                        variant={
+                          trackFor(selected) === channel.id
+                            ? "secondary"
+                            : "ghost"
+                        }
+                        className="h-auto w-full justify-start py-2.5"
+                        title={`通道 ${channel.id}`}
+                        aria-pressed={trackFor(selected) === channel.id}
+                        onClick={() =>
+                          setAssignments((old) => ({
+                            ...old,
+                            [selected]: channel.id,
+                          }))
+                        }
+                      >
+                        <VideoIcon
+                          data-icon="inline-start"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{channel.name}</span>
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </ScrollArea>
+            </ScrollArea>
           </aside>
           <section className="live-stage" aria-label="多窗口实时预览">
-            <div className="wall-toolbar">
-              <span>{layout} 路布局</span>
-              <WallLayoutControl
-                value={layout}
-                onChange={(value) => {
-                  setLayout(value)
-                  setSelected((old) => Math.min(old, value - 1))
-                }}
-              />
-            </div>
-            <div className="live-wall-viewport" data-layout={layout}>
+            <ScrollArea
+              className="live-wall-scroll"
+              scrollbars="both"
+              viewportProps={{
+                className: "live-wall-viewport",
+                "data-layout": layout,
+              }}
+              contentProps={{ className: "live-wall-content" }}
+            >
               <VideoWall
                 count={layout}
                 label="实时预览窗口"
@@ -197,17 +260,17 @@ export function LiveConsole() {
                     onFocusCapture={() => setSelected(index)}
                     onPointerDown={() => setSelected(index)}
                   >
-                    <div className="window-heading">
+                    <div className="window-heading live-window-heading">
                       <Button
                         className="window-selector"
                         type="button"
                         size="xs"
-                        variant={selected === index ? "secondary" : "ghost"}
+                        variant="ghost"
                         aria-label={`选择窗口 ${index + 1}`}
                         aria-pressed={selected === index}
                         onClick={() => setSelected(index)}
                       >
-                        窗口 {index + 1}
+                        {index + 1}
                       </Button>
                       <Select
                         items={[
@@ -227,6 +290,7 @@ export function LiveConsole() {
                         }
                       >
                         <SelectTrigger
+                          className="window-channel"
                           size="sm"
                           aria-label={`窗口 ${index + 1} 通道`}
                         >
@@ -251,12 +315,15 @@ export function LiveConsole() {
                       }}
                       key={`${generation}|${trackFor(index)}`}
                       track={trackFor(index)}
+                      onActivityChange={(active) =>
+                        updateActivity(index, active)
+                      }
                       live
                     />
                   </section>
                 )}
               />
-            </div>
+            </ScrollArea>
           </section>
         </div>
       </main>

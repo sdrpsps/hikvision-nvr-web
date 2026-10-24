@@ -30,6 +30,7 @@ type Session = {
   segments: { duration: number; bytes: number }[]
   bytes: number
   codec?: "h264" | "hevc"
+  estimatedDurationSeconds?: number
   complete: boolean
   error?: AppError
   task?: Promise<void>
@@ -140,6 +141,14 @@ export class PlaybackSessions {
     session.task = (async () => {
       await this.initialize()
       const segment = await resolve()
+      // Only the service can establish whether search boundaries clipped a file.
+      const estimatedDurationSeconds = segment.estimatedDurationSeconds
+      if (
+        estimatedDurationSeconds !== undefined &&
+        Number.isFinite(estimatedDurationSeconds) &&
+        estimatedDurationSeconds > 0
+      )
+        session.estimatedDurationSeconds = estimatedDurationSeconds
       if (controller.signal.aborted)
         throw new AppError("MEDIA_CANCELLED", 503, "回放已取消。")
       await mkdir(session.directory, { mode: 0o700 })
@@ -254,6 +263,12 @@ export class PlaybackSessions {
         id,
         playlistUrl: `/api/streams/${id}/index.m3u8`,
         durationSeconds: this.duration(session),
+        ...(session.estimatedDurationSeconds !== undefined && {
+          estimatedDurationSeconds: session.estimatedDurationSeconds,
+        }),
+        ...(session.complete && {
+          totalDurationSeconds: this.duration(session),
+        }),
         expiresAt: new Date(session.expiresAt).toISOString(),
         mode: "stream-copy" as const,
         codec: session.codec!,
@@ -287,6 +302,10 @@ export class PlaybackSessions {
     return {
       complete: session.complete,
       durationSeconds: this.duration(session),
+      ...(session.estimatedDurationSeconds !== undefined && {
+        estimatedDurationSeconds: session.estimatedDurationSeconds,
+      }),
+      ...(session.complete && { totalDurationSeconds: this.duration(session) }),
     }
   }
   async audio(id: string, after: number, at: number) {

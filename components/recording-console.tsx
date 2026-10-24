@@ -1,15 +1,15 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import {
   ArchiveIcon,
+  ChevronDownIcon,
   CircleAlertIcon,
-  ClockIcon,
+  InfoIcon,
+  MonitorIcon,
   RefreshCwIcon,
-  VideoIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
@@ -22,6 +22,12 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { RecordingDatePicker } from "@/components/recording-date-picker"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Switch } from "@/components/ui/switch"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -31,15 +37,9 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  channelsSchema,
-  dateSchema,
-  deviceSchema,
-  recordingsSchema,
-  type Channel,
-  type Recordings,
-} from "@/shared/contracts"
-import { getJson } from "@/lib/api"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { dateSchema, type Recordings } from "@/shared/contracts"
+import { useChannels, useDevice, useRecordings } from "@/hooks/use-api"
 import { cn } from "@/lib/utils"
 import { PreviewPlayer } from "@/components/preview-player"
 import { ConsoleNav } from "@/components/console-nav"
@@ -69,23 +69,42 @@ function segmentEnd(iso: string, data: Recordings) {
     ? "24:00:00"
     : clock(iso, data.timeZone)
 }
-type Resource = { channels: Channel[]; timeZone: string; today: string }
-type QueryResult = { key: string; data?: Recordings; error?: string }
+type RecordingSelection = {
+  key: string
+  selected: string
+  continuous: boolean
+  automatic: string
+  sequenceNotice: string
+  listOpen: boolean
+}
+
+function emptySelection(key: string): RecordingSelection {
+  return {
+    key,
+    selected: "",
+    continuous: false,
+    automatic: "",
+    sequenceNotice: "",
+    listOpen: false,
+  }
+}
 
 export function RecordingConsole() {
-  const [resources, setResources] = useState<Resource>()
-  const [resourceError, setResourceError] = useState("")
-  const [device, setDevice] = useState<{ model: string; firmware: string }>()
-  const [deviceError, setDeviceError] = useState("")
-  const [track, setTrack] = useState("")
-  const [date, setDate] = useState("")
+  const channelsQuery = useChannels()
+  const resources = channelsQuery.data
+  const resourceError = channelsQuery.error?.message
+  const [preferredTrack, setTrack] = useState("")
+  const [preferredDate, setDate] = useState("")
+  const track = resources?.channels.some(
+    (channel) => channel.id === preferredTrack
+  )
+    ? preferredTrack
+    : (resources?.channels[0]?.id ?? "")
+  const date = preferredDate || resources?.today || ""
+  const recordingsQuery = useRecordings({ track, date })
   const [refresh, setRefresh] = useState(0)
-  const [result, setResult] = useState<QueryResult>()
-  const [selected, setSelected] = useState("")
+  const [selection, setSelection] = useState(() => emptySelection(""))
   const [zoom, setZoom] = useState("1")
-  const [continuous, setContinuous] = useState(false)
-  const [automatic, setAutomatic] = useState("")
-  const [sequenceNotice, setSequenceNotice] = useState("")
   const [preferences, setPreferences] = useState<PlaybackPreferences>({
     rate: 1,
     sound: false,
@@ -96,73 +115,36 @@ export function RecordingConsole() {
     },
     []
   )
-  const key = `${track}|${date}|${refresh}`
-  const data = result?.key === key ? result.data : undefined
-  const error = result?.key === key ? result.error : undefined
+  const key = `${track}|${date}|${refresh}|${recordingsQuery.dataUpdatedAt}`
+  const activeSelection =
+    selection.key === key ? selection : emptySelection(key)
+  const { selected, continuous, automatic, sequenceNotice, listOpen } =
+    activeSelection
+  function updateSelection(patch: Partial<Omit<RecordingSelection, "key">>) {
+    setSelection((old) => ({
+      ...(old.key === key ? old : emptySelection(key)),
+      ...patch,
+    }))
+  }
+  const error = recordingsQuery.error?.message
+  const data =
+    !error && !recordingsQuery.isFetching ? recordingsQuery.data : undefined
   const validDate = dateSchema.safeParse(date).success
-  const loading = !!resources && !!track && validDate && result?.key !== key
+  const loading =
+    !!resources && !!track && validDate && recordingsQuery.isFetching
 
-  useEffect(() => {
-    const controller = new AbortController()
-    getJson("/api/channels", channelsSchema, controller.signal)
-      .then((value) => {
-        setResources(value)
-        setResourceError("")
-        setTrack((old) =>
-          value.channels.some((channel) => channel.id === old)
-            ? old
-            : (value.channels[0]?.id ?? "")
-        )
-        setDate((old) => old || value.today)
-      })
-      .catch((error: Error) => {
-        if (!controller.signal.aborted) setResourceError(error.message)
-      })
-    getJson("/api/device", deviceSchema, controller.signal)
-      .then((value) => {
-        setDevice(value)
-        setDeviceError("")
-      })
-      .catch((error: Error) => {
-        if (!controller.signal.aborted) setDeviceError(error.message)
-      })
-    return () => controller.abort()
-  }, [refresh])
+  function refreshQueries() {
+    setRefresh((value) => value + 1)
+    void channelsQuery.refetch()
+    if (track && validDate) void recordingsQuery.refetch()
+  }
 
-  useEffect(() => {
-    if (!track || !validDate) return
-    const controller = new AbortController()
-    getJson(
-      `/api/recordings?${new URLSearchParams({ track, date })}`,
-      recordingsSchema,
-      controller.signal
-    )
-      .then((data) => {
-        setResult({ key, data })
-        setSelected("")
-        setAutomatic("")
-        setContinuous(false)
-        setSequenceNotice("")
-      })
-      .catch((error: Error) => {
-        if (!controller.signal.aborted) setResult({ key, error: error.message })
-      })
-    return () => controller.abort()
-  }, [track, date, key, validDate])
-
-  const currentChannel = resources?.channels.find(
-    (channel) => channel.id === track
-  )
   const segment = data?.segments.find((segment) => segment.id === selected)
   function selectSegment(id: string) {
-    setAutomatic("")
-    setSequenceNotice("")
-    setSelected(id)
+    updateSelection({ selected: id, automatic: "", sequenceNotice: "" })
   }
   function stopSequence() {
-    setAutomatic("")
-    setContinuous(false)
-    setSequenceNotice("")
+    updateSelection({ automatic: "", continuous: false, sequenceNotice: "" })
   }
   function nextSegment() {
     if (!continuous || !data || !segment) return
@@ -171,265 +153,177 @@ export function RecordingConsole() {
         data.segments.findIndex((item) => item.id === segment.id) + 1
       ]
     if (!next) {
-      setAutomatic("")
-      setContinuous(false)
-      setSequenceNotice("已播放到当日最后一个片段。")
+      updateSelection({
+        automatic: "",
+        continuous: false,
+        sequenceNotice: "已播放到当日最后一个片段。",
+      })
       return
     }
     const gap = Date.parse(next.startAt) - Date.parse(segment.endAt)
-    setSequenceNotice(
-      gap > 1000
-        ? `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
-        : "已切换到下一片段。"
-    )
-    setAutomatic(next.id)
-    setSelected(next.id)
+    updateSelection({
+      sequenceNotice:
+        gap > 1000
+          ? `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
+          : "已切换到下一片段。",
+      automatic: next.id,
+      selected: next.id,
+    })
   }
+  // This is a query snapshot. Future hours are neither covered nor missing yet.
+  const observedEnd = data
+    ? Math.min(Date.parse(data.range.endAt), recordingsQuery.dataUpdatedAt)
+    : 0
   const coverage =
     data?.coverage.reduce(
-      (sum, item) => sum + Date.parse(item.endAt) - Date.parse(item.startAt),
+      (sum, item) =>
+        sum +
+        Math.max(
+          0,
+          Math.min(Date.parse(item.endAt), observedEnd) -
+            Date.parse(item.startAt)
+        ),
       0
     ) ?? 0
+  const gaps =
+    data?.gaps.filter(
+      (item) =>
+        Date.parse(item.startAt) < Math.min(Date.parse(item.endAt), observedEnd)
+    ) ?? []
 
   return (
-    <div className="console-shell">
+    <div className="console-shell playback-shell">
       <header className="console-header">
         <div className="console-brand">
           <div className="brand-mark">
-            <ArchiveIcon aria-hidden="true" />
+            <MonitorIcon aria-hidden="true" />
           </div>
-          <span>录像档案</span>
-          <span className="brand-divider" />
-          <span className="text-sm font-normal text-muted-foreground">
-            NVR 控制台
-          </span>
+          <span>NVR 控制台</span>
         </div>
         <ConsoleNav active="playback" />
-        <Badge variant="outline">只读查询</Badge>
       </header>
-      <main className="console-main">
-        <div className="page-heading">
-          <div>
-            <h1>一天的录像，尽在时间轴</h1>
-            <p>选择录像轨道和日期，查看设备上的历史录像区间。</p>
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => setRefresh((value) => value + 1)}
-          >
-            <RefreshCwIcon data-icon="inline-start" />
-            重新查询
-          </Button>
-        </div>
-        <div className="console-workspace">
-          <aside className="query-sidebar">
-            <h2>检索录像</h2>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="track">录像轨道</FieldLabel>
-                <Select
-                  items={
-                    resources?.channels.map((channel) => ({
-                      label: channel.name,
-                      value: channel.id,
-                    })) ?? []
-                  }
-                  value={track}
-                  onValueChange={(value) => setTrack(value ?? "")}
-                  disabled={!resources?.channels.length}
-                >
-                  <SelectTrigger id="track" className="w-full">
-                    <SelectValue placeholder="暂无可用轨道" />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    <SelectGroup>
-                      {resources?.channels.map((channel) => (
-                        <SelectItem key={channel.id} value={channel.id}>
-                          {channel.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field data-invalid={!!date && !validDate}>
-                <FieldLabel htmlFor="date">设备日期</FieldLabel>
-                <RecordingDatePicker
-                  id="date"
-                  value={date}
-                  timeZone={resources?.timeZone ?? "Asia/Shanghai"}
-                  onChange={setDate}
-                  disabled={!resources}
-                />
-              </Field>
-            </FieldGroup>
-            <p className="sidebar-note">
-              <ClockIcon aria-hidden="true" />
-              {resources?.timeZone ?? "读取设备时区中"}
-            </p>
-            {!!date && !validDate && (
-              <p className="text-sm text-destructive" role="alert">
-                请选择有效的日期。
-              </p>
-            )}
-            <div className="device-summary">
-              <VideoIcon
-                className="size-5 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <h3>录像机</h3>
-              <p>
-                {device?.model ??
-                  (deviceError ? "设备概要读取失败" : "设备概要读取中")}
-              </p>
-              {device?.firmware && (
-                <p className="text-xs text-muted-foreground">
-                  {device.firmware}
-                </p>
-              )}
-              {resources && <p>{resources.channels.length} 条录像轨道</p>}
-              {deviceError && (
-                <p className="text-xs text-destructive">{deviceError}</p>
-              )}
-            </div>
-            <p className="sidebar-note">
-              轨道配置状态不代表当天是否有录像，检索结果以设备返回为准。
-            </p>
-          </aside>
-          <section
-            className="recording-content"
-            aria-label="录像查询结果"
-            aria-busy={loading}
-          >
-            {resourceError || error ? (
-              <Alert variant="destructive">
-                <CircleAlertIcon />
-                <AlertTitle>录像查询失败</AlertTitle>
-                <AlertDescription>{resourceError || error}</AlertDescription>
-              </Alert>
-            ) : null}
-            {!resources && !resourceError ? (
-              <div
-                className="flex flex-col gap-4"
-                role="status"
-                aria-label="正在读取设备"
+      <main className="console-main playback-main">
+        <h1 className="sr-only">录像回放</h1>
+        <section className="playback-query-bar" aria-label="检索录像">
+          <FieldGroup className="playback-query-fields">
+            <Field data-disabled={!resources?.channels.length}>
+              <FieldLabel htmlFor="track">摄像头</FieldLabel>
+              <Select
+                items={
+                  resources?.channels.map((channel) => ({
+                    label: channel.name,
+                    value: channel.id,
+                  })) ?? []
+                }
+                value={track}
+                onValueChange={(value) => {
+                  setSelection(emptySelection(""))
+                  setTrack(value ?? "")
+                }}
+                disabled={!resources?.channels.length}
               >
-                <Skeleton className="h-8 w-56" />
-                <Skeleton className="h-40 w-full" />
-              </div>
-            ) : null}
-            {resources && !resources.channels.length ? (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyTitle>设备未返回录像轨道</EmptyTitle>
-                  <EmptyDescription>
-                    请检查设备连接和账号查询权限，再重新查询。
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : null}
-            {resources && !!track && (
-              <>
-                <div className="result-heading">
-                  <div>
-                    <p>{date || "请选择日期"}</p>
-                    <h2>{currentChannel?.name ?? `轨道 ${track}`}</h2>
-                  </div>
-                  <Badge variant="secondary">
-                    {loading
-                      ? "正在查询"
-                      : data
-                        ? `${data.segments.length} 个录像片段`
-                        : "等待查询"}
-                  </Badge>
-                </div>
-                {loading ? (
-                  <div
-                    className="flex flex-col gap-4"
-                    role="status"
-                    aria-label="正在查询录像"
-                  >
-                    <Skeleton className="h-36 w-full" />
-                    <Skeleton className="h-24 w-full" />
-                  </div>
-                ) : null}
-                {data && (
-                  <>
-                    <div className="timeline-toolbar">
-                      <h3>全天时间轴</h3>
-                      <div className="flex items-center gap-3">
-                        <span className="timeline-legend">有录像</span>
-                        <ToggleGroup
-                          aria-label="时间轴缩放"
-                          value={[zoom]}
-                          onValueChange={(values) => {
-                            if (values[0]) setZoom(values[0])
-                          }}
-                          variant="outline"
-                          size="sm"
-                          spacing={0}
-                        >
-                          <ToggleGroupItem value="1">全天</ToggleGroupItem>
-                          <ToggleGroupItem value="2">2 倍</ToggleGroupItem>
-                          <ToggleGroupItem value="4">4 倍</ToggleGroupItem>
-                        </ToggleGroup>
-                      </div>
-                    </div>
-                    <RecordingTimeline
-                      data={data}
-                      selected={selected}
-                      onSelect={selectSegment}
-                      zoom={Number(zoom)}
-                    />
-                    <div className="coverage-summary">
-                      <span>
-                        录像覆盖 <strong>{duration(coverage)}</strong>
-                      </span>
-                      <span>
-                        未覆盖区间 <strong>{data.gaps.length} 个</strong>
-                      </span>
-                    </div>
-                    {segment && (
+                <SelectTrigger id="track" className="w-full">
+                  <SelectValue placeholder="暂无可用摄像头" />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {resources?.channels.map((channel) => (
+                      <SelectItem key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field
+              data-invalid={!!date && !validDate}
+              data-disabled={!resources}
+            >
+              <FieldLabel htmlFor="date">日期</FieldLabel>
+              <RecordingDatePicker
+                id="date"
+                value={date}
+                timeZone={resources?.timeZone ?? "Asia/Shanghai"}
+                onChange={(value) => {
+                  setSelection(emptySelection(""))
+                  setDate(value)
+                }}
+                disabled={!resources}
+              />
+            </Field>
+          </FieldGroup>
+          <div className="query-actions">
+            <DeviceDetails
+              channelCount={resources?.channels.length}
+              timeZone={resources?.timeZone}
+            />
+            <Button variant="outline" onClick={refreshQueries}>
+              <RefreshCwIcon data-icon="inline-start" />
+              刷新
+            </Button>
+          </div>
+          {!!date && !validDate && (
+            <p className="text-sm text-destructive" role="alert">
+              请选择有效的日期。
+            </p>
+          )}
+        </section>
+        <section
+          className="recording-content"
+          aria-label="录像查询结果"
+          aria-busy={loading}
+        >
+          {resourceError || error ? (
+            <Alert variant="destructive">
+              <CircleAlertIcon />
+              <AlertTitle>录像查询失败</AlertTitle>
+              <AlertDescription>{resourceError || error}</AlertDescription>
+            </Alert>
+          ) : null}
+          {!resources && !resourceError ? (
+            <div
+              className="flex flex-col gap-4"
+              role="status"
+              aria-label="正在读取设备"
+            >
+              <Skeleton className="h-8 w-56" />
+              <Skeleton className="h-40 w-full" />
+            </div>
+          ) : null}
+          {resources && !resources.channels.length ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>暂无可用摄像头</EmptyTitle>
+                <EmptyDescription>
+                  请检查设备连接和账号查询权限，再刷新。
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
+          {loading ? (
+            <div
+              className="flex flex-col gap-4"
+              role="status"
+              aria-label="正在查询录像"
+            >
+              <Skeleton className="h-60 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : null}
+          {data && (
+            <>
+              {data.segments.length > 0 ? (
+                <div className="playback-focus">
+                  {segment ? (
+                    <>
                       <div className="selected-segment" role="status">
                         <span>已选片段</span>
                         <strong>
                           {clock(segment.startAt, data.timeZone)} —{" "}
                           {segmentEnd(segment.endAt, data)}
                         </strong>
-                        <span>
-                          设备报告：{segment.codec ?? "编码未提供"}
-                          ；实际编码以预览为准
-                        </span>
                       </div>
-                    )}
-                    {segment && (
-                      <FieldGroup>
-                        <Field orientation="horizontal">
-                          <Switch
-                            id="continuous-playback"
-                            aria-label="连续播放"
-                            checked={continuous}
-                            onCheckedChange={(checked) => {
-                              setContinuous(checked)
-                              if (!checked) setAutomatic("")
-                              setSequenceNotice("")
-                            }}
-                          />
-                          <FieldLabel htmlFor="continuous-playback">
-                            连续播放下一片段
-                          </FieldLabel>
-                        </Field>
-                      </FieldGroup>
-                    )}
-                    {sequenceNotice && (
-                      <p
-                        role="status"
-                        className="text-sm text-muted-foreground"
-                      >
-                        {sequenceNotice}
-                      </p>
-                    )}
-                    {segment && (
                       <PreviewPlayer
                         key={`${key}|${segment.id}`}
                         track={track}
@@ -440,76 +334,245 @@ export function RecordingConsole() {
                         onPreferencesChange={updatePreferences}
                         onPlaybackEnded={continuous ? nextSegment : undefined}
                         onStop={stopSequence}
+                        playbackControls={
+                          <FieldGroup className="continuous-control">
+                            <Field orientation="horizontal">
+                              <Switch
+                                id="continuous-playback"
+                                aria-label="连续播放"
+                                checked={continuous}
+                                onCheckedChange={(checked) => {
+                                  updateSelection({
+                                    continuous: checked,
+                                    automatic: checked ? automatic : "",
+                                    sequenceNotice: "",
+                                  })
+                                }}
+                              />
+                              <FieldLabel htmlFor="continuous-playback">
+                                连续播放
+                              </FieldLabel>
+                            </Field>
+                          </FieldGroup>
+                        }
                       />
-                    )}
-                    {!data.segments.length ? (
-                      <Empty className="py-14">
-                        <EmptyHeader>
-                          <EmptyMedia variant="icon">
-                            <ArchiveIcon />
-                          </EmptyMedia>
-                          <EmptyTitle>这一天没有检索到录像</EmptyTitle>
-                          <EmptyDescription>
-                            尝试其他日期或轨道。此结果表示设备查询为空。
-                          </EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    ) : (
-                      <div className="segment-list">
-                        <div className="segment-list-heading">
-                          <h3>录像片段</h3>
-                          <span>时间均按设备时区显示</span>
-                        </div>
-                        <ol>
-                          {data.segments.map((item, index) => (
-                            <li key={item.id}>
-                              <Button
-                                type="button"
-                                variant={
-                                  selected === item.id ? "secondary" : "ghost"
-                                }
-                                aria-pressed={selected === item.id}
-                                className={cn(
-                                  "segment-row",
-                                  selected === item.id && "is-selected"
-                                )}
-                                onClick={() => selectSegment(item.id)}
-                              >
-                                <span className="segment-index">
-                                  {String(index + 1).padStart(2, "0")}
-                                </span>
-                                <span className="segment-time">
-                                  {clock(item.startAt, data.timeZone)}
-                                  <span className="text-muted-foreground">
-                                    {" "}
-                                    —{" "}
-                                  </span>
-                                  {segmentEnd(item.endAt, data)}
-                                </span>
-                                <span className="segment-duration">
-                                  {duration(
-                                    Date.parse(item.endAt) -
-                                      Date.parse(item.startAt)
-                                  )}
-                                </span>
-                                <span className="segment-codec">
-                                  {item.codec ?? "未知编码"}
-                                </span>
-                              </Button>
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </section>
-        </div>
-        <footer className="console-footer">{/* 待定 */}</footer>
+                    </>
+                  ) : (
+                    <Empty className="playback-selection-empty">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <ArchiveIcon />
+                        </EmptyMedia>
+                        <EmptyTitle>选择录像片段</EmptyTitle>
+                        <EmptyDescription>
+                          在下方选择要查看的录像。
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  )}
+                  {sequenceNotice && (
+                    <p role="status" className="text-sm text-muted-foreground">
+                      {sequenceNotice}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <Empty className="py-14">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ArchiveIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>这一天没有检索到录像</EmptyTitle>
+                    <EmptyDescription>试试其他日期或摄像头。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+              <section className="recording-distribution" aria-label="当日录像">
+                <div className="timeline-toolbar">
+                  <div className="distribution-heading">
+                    <h2>当日录像</h2>
+                    <span>选择片段后播放</span>
+                  </div>
+                  <ToggleGroup
+                    aria-label="时间轴缩放"
+                    value={[zoom]}
+                    onValueChange={(values) => {
+                      if (values[0]) setZoom(values[0])
+                    }}
+                    variant="outline"
+                    size="sm"
+                    spacing={0}
+                  >
+                    <ToggleGroupItem value="1">全天</ToggleGroupItem>
+                    <ToggleGroupItem value="2">2 倍</ToggleGroupItem>
+                    <ToggleGroupItem value="4">4 倍</ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+                <RecordingTimeline
+                  data={data}
+                  selected={selected}
+                  onSelect={selectSegment}
+                  zoom={Number(zoom)}
+                />
+                <div className="coverage-summary">
+                  <span>{data.segments.length} 个录像片段</span>
+                  <span>
+                    覆盖 <strong>{duration(coverage)}</strong>
+                  </span>
+                  {gaps.length > 0 && (
+                    <span>
+                      缺口 <strong>{gaps.length} 处</strong>
+                    </span>
+                  )}
+                  {observedEnd < Date.parse(data.range.endAt) && (
+                    <span>截至本次查询</span>
+                  )}
+                </div>
+              </section>
+              {data.segments.length > 0 && (
+                <section className="segment-list" aria-label="录像片段列表">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="segment-list-toggle"
+                    aria-expanded={listOpen}
+                    aria-controls="recording-segments"
+                    onClick={() => updateSelection({ listOpen: !listOpen })}
+                  >
+                    片段列表
+                    <ChevronDownIcon
+                      data-icon="inline-end"
+                      aria-hidden="true"
+                    />
+                  </Button>
+                  {listOpen && (
+                    <ol id="recording-segments">
+                      {data.segments.map((item, index) => (
+                        <li key={item.id}>
+                          <Button
+                            type="button"
+                            variant={
+                              selected === item.id ? "secondary" : "ghost"
+                            }
+                            aria-label={`选择片段 ${index + 1}，${clock(item.startAt, data.timeZone)} 至 ${segmentEnd(item.endAt, data)}`}
+                            aria-pressed={selected === item.id}
+                            className={cn(
+                              "segment-row",
+                              selected === item.id && "is-selected"
+                            )}
+                            onClick={() => selectSegment(item.id)}
+                          >
+                            <span className="segment-index">
+                              {String(index + 1).padStart(2, "0")}
+                            </span>
+                            <span className="segment-time">
+                              {clock(item.startAt, data.timeZone)} —{" "}
+                              {segmentEnd(item.endAt, data)}
+                            </span>
+                            <span className="segment-duration">
+                              {duration(
+                                Date.parse(item.endAt) -
+                                  Date.parse(item.startAt)
+                              )}
+                            </span>
+                          </Button>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
+              )}
+            </>
+          )}
+        </section>
       </main>
     </div>
+  )
+}
+
+function DeviceDetails({
+  channelCount,
+  timeZone,
+}: {
+  channelCount?: number
+  timeZone?: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<Button variant="ghost" />}>
+        <InfoIcon data-icon="inline-start" />
+        设备信息
+      </PopoverTrigger>
+      <PopoverContent align="end" className="device-details">
+        <PopoverTitle>设备信息</PopoverTitle>
+        {open && (
+          <DeviceDetailsContent
+            channelCount={channelCount}
+            timeZone={timeZone}
+          />
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function DeviceDetailsContent({
+  channelCount,
+  timeZone,
+}: {
+  channelCount?: number
+  timeZone?: string
+}) {
+  const deviceQuery = useDevice({ enabled: true })
+  const device = deviceQuery.data
+  const error = deviceQuery.error?.message
+  return (
+    <>
+      {device ? (
+        <>
+          <p className="device-model">{device.model}</p>
+          <dl>
+            <div>
+              <dt>固件</dt>
+              <dd>{device.firmware}</dd>
+            </div>
+            {channelCount !== undefined && (
+              <div>
+                <dt>摄像头</dt>
+                <dd>{channelCount} 路</dd>
+              </div>
+            )}
+            {timeZone && (
+              <div>
+                <dt>时区</dt>
+                <dd>
+                  {timeZone === "Asia/Shanghai"
+                    ? "北京时间（UTC+8）"
+                    : timeZone}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </>
+      ) : error && !deviceQuery.isFetching ? (
+        <>
+          <Alert variant="destructive">
+            <AlertTitle>设备信息读取失败</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void deviceQuery.refetch()}
+          >
+            重试
+          </Button>
+        </>
+      ) : (
+        <p role="status">正在读取设备信息…</p>
+      )}
+    </>
   )
 }
 
@@ -531,11 +594,16 @@ function RecordingTimeline({
     (_, index) => Math.min(index * 3600000, total)
   )
   return (
-    <div
-      className="timeline-scroll"
-      tabIndex={0}
-      role="region"
-      aria-label="全天录像时间轴，可横向滚动"
+    <ScrollArea
+      className="timeline-scroll-area"
+      scrollbars="horizontal"
+      contentProps={{ style: { minWidth: "fit-content" } }}
+      viewportProps={{
+        className: "timeline-scroll",
+        tabIndex: 0,
+        role: "region",
+        "aria-label": "全天录像时间轴，可横向滚动",
+      }}
     >
       <div
         className="timeline-chart"
@@ -588,6 +656,6 @@ function RecordingTimeline({
           })}
         </div>
       </div>
-    </div>
+    </ScrollArea>
   )
 }

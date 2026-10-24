@@ -6,7 +6,7 @@ export async function selectOption(page: Page, label: string, option: string) {
 }
 
 export async function selectDate(page: Page, value: string) {
-  const trigger = page.getByRole("button", { name: "设备日期", exact: true })
+  const trigger = page.getByRole("button", { name: "日期", exact: true })
   if ((await trigger.textContent())?.includes(value)) return
   await trigger.click()
   const [year, month, day] = value.split("-").map(Number)

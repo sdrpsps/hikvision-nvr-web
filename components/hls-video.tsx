@@ -7,6 +7,8 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
+  type CSSProperties,
 } from "react"
 import {
   MaximizeIcon,
@@ -14,14 +16,31 @@ import {
   PlayIcon,
   Volume2Icon,
   VolumeXIcon,
+  LocateIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldDescription,
+} from "@/components/ui/field"
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  PopoverTitle,
+} from "@/components/ui/popover"
+import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
+import { useStreamAudio } from "@/hooks/use-stream-api"
 import { PlaybackRate } from "@/components/playback-rate"
 import { LocalLiveAudio } from "@/lib/live-audio"
-import type { LiveStream } from "@/shared/contracts"
+import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
 
 export type PlaybackPreferences = { rate: number; sound: boolean }
 
@@ -30,20 +49,26 @@ export function HlsVideo({
   live = false,
   onError,
   actions,
+  frame,
+  playbackControls,
   initialPreferences,
   onPreferencesChange,
   onEnded,
+  playbackStatus,
 }: {
-  session: LiveStream
+  session: LiveStream | Preview
   live?: boolean
   onError: (message: string) => void
   actions?: ReactNode
+  frame: RefObject<HTMLDivElement | null>
+  playbackControls?: ReactNode
   initialPreferences?: PlaybackPreferences
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onEnded?: () => void
+  playbackStatus?: PlaybackStatus
 }) {
   const video = useRef<HTMLVideoElement>(null)
-  const frame = useRef<HTMLDivElement>(null)
+  const loadAudio = useStreamAudio(session.id)
   const audio = useRef<LocalLiveAudio | null>(null)
   const ptsOffset = useRef<number | undefined>(undefined)
   const [sound, setSound] = useState(false)
@@ -52,9 +77,83 @@ export function HlsVideo({
   const [playError, setPlayError] = useState("")
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [pendingSeek, setPendingSeek] = useState<number | null>(null)
+  const seekTarget = useRef<number | null>(null)
+  const [scrub, setScrub] = useState<{ seconds: number; duration: number }>()
+  const [locateOpen, setLocateOpen] = useState(false)
+  const [locateInput, setLocateInput] = useState("")
+  const [locateError, setLocateError] = useState("")
+  const locateId = useId()
+  const portalContainer = useFullscreenContainer(frame)
   const [rate, setRate] = useState(initialPreferences?.rate ?? 1)
   const preferences = useRef(initialPreferences)
   const soundId = useId()
+  const recorded = "durationSeconds" in session ? session : undefined
+  const totalDuration = playbackStatus?.complete
+    ? (playbackStatus.totalDurationSeconds ?? playbackStatus.durationSeconds)
+    : recorded?.totalDurationSeconds
+  const availableDuration = Math.max(
+    recorded?.durationSeconds ?? 0,
+    playbackStatus?.durationSeconds ?? 0,
+    duration
+  )
+  const estimate = recorded?.estimatedDurationSeconds
+  // An estimate that media has already exceeded is no longer a useful scale.
+  const timelineDuration =
+    totalDuration ??
+    (estimate && availableDuration <= estimate + 1 ? estimate : 0)
+  const sliderDuration = scrub?.duration ?? timelineDuration
+  const cancelSeek = () => {
+    seekTarget.current = null
+    setPendingSeek(null)
+  }
+  const applyPendingSeek = useCallback(() => {
+    const element = video.current,
+      target = seekTarget.current
+    if (!element || target === null) return
+    if (totalDuration !== undefined && target > totalDuration) {
+      seekTarget.current = null
+      setPendingSeek(null)
+      setPlayError(
+        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`
+      )
+      return
+    }
+    if (
+      Number.isNaN(element.duration) ||
+      (Number.isFinite(element.duration) && target > element.duration)
+    )
+      return
+    let seekable = false
+    for (let index = 0; index < element.seekable.length; index++)
+      if (
+        target >= element.seekable.start(index) &&
+        target <= element.seekable.end(index)
+      )
+        seekable = true
+    if (!seekable) return
+    try {
+      element.currentTime = target
+      setPosition(target)
+      seekTarget.current = null
+      setPendingSeek(null)
+    } catch {
+      seekTarget.current = null
+      setPendingSeek(null)
+      setPlayError("暂时无法跳转，请稍后重试。")
+    }
+  }, [totalDuration])
+  function requestSeek(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds < 0) return
+    setPlayError("")
+    seekTarget.current = seconds
+    setPendingSeek(seconds)
+    applyPendingSeek()
+  }
+  useEffect(() => {
+    const frame = requestAnimationFrame(applyPendingSeek)
+    return () => cancelAnimationFrame(frame)
+  }, [applyPendingSeek, availableDuration])
   useEffect(() => {
     const element = video.current
     if (!element) return
@@ -139,7 +238,7 @@ export function HlsVideo({
     try {
       player = new LocalLiveAudio(
         video.current,
-        session.id,
+        loadAudio,
         () => ptsOffset.current,
         (message) => {
           audio.current = null
@@ -170,7 +269,7 @@ export function HlsVideo({
     } finally {
       clearTimeout(timeout)
     }
-  }, [session.id, live, onPreferencesChange])
+  }, [loadAudio, live, onPreferencesChange])
   useEffect(() => {
     if (!live && preferences.current?.sound) void enableSound()
   }, [enableSound, live])
@@ -185,6 +284,20 @@ export function HlsVideo({
       void enableSound()
     }
   }
+  const errorMessages = (
+    <>
+      {playError && (
+        <p className="text-sm text-destructive" role="alert">
+          {playError}
+        </p>
+      )}
+      {audioError && (
+        <p className="text-sm text-destructive" role="alert">
+          {audioError}
+        </p>
+      )}
+    </>
+  )
   return (
     <div className="video-surface" ref={frame}>
       <video
@@ -203,6 +316,10 @@ export function HlsVideo({
         onEnded={(event) => {
           if (!event.currentTarget.ended) return
           setPaused(true)
+          if (seekTarget.current !== null) {
+            applyPendingSeek()
+            return
+          }
           onEnded?.()
         }}
         onTimeUpdate={(event) => {
@@ -212,36 +329,153 @@ export function HlsVideo({
           const seconds = event.currentTarget.duration
           if (!live)
             setDuration(Number.isFinite(seconds) && seconds > 0 ? seconds : 0)
+          applyPendingSeek()
         }}
+        onProgress={applyPendingSeek}
+        onLoadedMetadata={applyPendingSeek}
+        onCanPlay={applyPendingSeek}
         onRateChange={(event) => setRate(event.currentTarget.playbackRate)}
       />
       {!live && (
-        <div className="playback-timeline">
-          <span>{mediaTime(position)}</span>
-          <Slider
-            aria-label="播放进度"
-            value={[Math.min(position, duration)]}
-            min={0}
-            max={duration || 1}
-            step={0.1}
-            disabled={!duration}
-            onValueChange={(value) => {
-              if (!video.current || !duration) return
-              const seconds = Array.isArray(value) ? value[0] : value
-              if (!Number.isFinite(seconds)) return
-              try {
-                video.current.currentTime = Math.max(
-                  0,
-                  Math.min(seconds, duration)
-                )
-                setPosition(video.current.currentTime)
-              } catch {
-                setPlayError("暂时无法跳转，请稍后重试。")
-              }
-            }}
-          />
-          <span>{mediaTime(Math.round(duration))}</span>
-        </div>
+        <>
+          <div className="playback-timeline">
+            <span>{mediaTime(scrub?.seconds ?? position)}</span>
+            <div className="playback-seek-track">
+              <Slider
+                className="playback-seek-slider"
+                style={
+                  {
+                    "--playback-read-percent": `${sliderDuration ? Math.min(100, (availableDuration / sliderDuration) * 100) : 0}%`,
+                    "--playback-position-percent": `${sliderDuration ? Math.min(100, (position / sliderDuration) * 100) : 0}%`,
+                  } as CSSProperties
+                }
+                aria-label="播放进度"
+                getAriaValueText={(_formatted, seconds) => mediaTime(seconds)}
+                value={[
+                  Math.min(
+                    scrub?.seconds ?? pendingSeek ?? position,
+                    sliderDuration || 0
+                  ),
+                ]}
+                min={0}
+                max={sliderDuration || 1}
+                step={0.1}
+                disabled={!sliderDuration}
+                onValueChange={(value) => {
+                  const seconds = Array.isArray(value) ? value[0] : value
+                  if (Number.isFinite(seconds))
+                    setScrub({ seconds, duration: sliderDuration })
+                }}
+                onValueCommitted={(value) => {
+                  const seconds = Array.isArray(value) ? value[0] : value
+                  setScrub(undefined)
+                  requestSeek(seconds)
+                }}
+              />
+              {pendingSeek !== null && sliderDuration > 0 && (
+                <span
+                  className="playback-seek-target"
+                  aria-hidden="true"
+                  style={{
+                    left: `${Math.min(100, (position / sliderDuration) * 100)}%`,
+                  }}
+                />
+              )}
+            </div>
+            <span>
+              {timelineDuration
+                ? `${totalDuration === undefined ? "约 " : ""}${mediaTime(Math.round(timelineDuration))}`
+                : "时长确认中"}
+            </span>
+            <Popover
+              open={locateOpen}
+              onOpenChange={(open) => {
+                setLocateOpen(open)
+                if (open) {
+                  setLocateInput(mediaTime(position))
+                  setLocateError("")
+                }
+              }}
+            >
+              <PopoverTrigger
+                render={
+                  <Button variant="ghost" size="sm" aria-label="定位时间" />
+                }
+              >
+                <LocateIcon data-icon="inline-start" />
+                定位
+              </PopoverTrigger>
+              <PopoverContent
+                container={portalContainer}
+                side="top"
+                align="end"
+              >
+                <PopoverTitle>定位到文件内时间</PopoverTitle>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const seconds = parseMediaTime(locateInput)
+                    if (seconds === undefined) {
+                      setLocateError("请输入分:秒或时:分:秒，例如 01:20:00。")
+                      return
+                    }
+                    if (
+                      totalDuration !== undefined &&
+                      seconds > totalDuration
+                    ) {
+                      setLocateError(
+                        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`
+                      )
+                      return
+                    }
+                    requestSeek(seconds)
+                    setLocateOpen(false)
+                  }}
+                >
+                  <FieldGroup className="gap-3">
+                    <Field data-invalid={!!locateError}>
+                      <FieldLabel htmlFor={locateId}>文件内时间</FieldLabel>
+                      <Input
+                        id={locateId}
+                        aria-invalid={!!locateError}
+                        placeholder="01:20:00"
+                        value={locateInput}
+                        onChange={(event) =>
+                          setLocateInput(event.currentTarget.value)
+                        }
+                      />
+                      <FieldDescription>
+                        从文件开头计算，支持分:秒或时:分:秒。
+                      </FieldDescription>
+                    </Field>
+                    {locateError && (
+                      <p role="alert" className="text-sm text-destructive">
+                        {locateError}
+                      </p>
+                    )}
+                    <Button type="submit" size="sm">
+                      跳转
+                    </Button>
+                  </FieldGroup>
+                </form>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <div className="playback-read-status">
+            <p role="status">
+              {pendingSeek !== null
+                ? `正在读取至 ${mediaTime(pendingSeek)}，已读取至 ${mediaTime(availableDuration)}`
+                : totalDuration === undefined
+                  ? `已读取至 ${mediaTime(availableDuration)}`
+                  : ""}
+            </p>
+            {pendingSeek !== null && (
+              <Button variant="ghost" size="xs" onClick={cancelSeek}>
+                取消定位
+              </Button>
+            )}
+          </div>
+        </>
       )}
       <div className="live-video-controls">
         <div className="live-controls-left">
@@ -287,6 +521,7 @@ export function HlsVideo({
               }}
             />
           )}
+          {playbackControls}
           <div className="sound-control">
             <Switch
               id={soundId}
@@ -326,15 +561,15 @@ export function HlsVideo({
         </div>
         {actions}
       </div>
-      {playError && (
-        <p className="text-sm text-destructive" role="alert">
-          {playError}
-        </p>
-      )}
-      {audioError && (
-        <p className="text-sm text-destructive" role="alert">
-          {audioError}
-        </p>
+      {live && (playError || audioError) ? (
+        <ScrollArea
+          className="live-error-scroll"
+          viewportProps={{ className: "live-error-viewport" }}
+        >
+          {errorMessages}
+        </ScrollArea>
+      ) : (
+        errorMessages
       )}
     </div>
   )
@@ -347,4 +582,12 @@ function mediaTime(seconds: number) {
   return minutes >= 60
     ? `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${clock}`
     : clock
+}
+
+function parseMediaTime(value: string) {
+  const match = /^(\d{1,3}):([0-5]\d)(?::([0-5]\d))?$/.exec(value.trim())
+  if (!match) return undefined
+  return match[3] === undefined
+    ? Number(match[1]) * 60 + Number(match[2])
+    : Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
 }

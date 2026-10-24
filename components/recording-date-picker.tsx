@@ -49,7 +49,7 @@ export function RecordingDatePicker({
         {value || "选择日期"}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto p-0">
-        <PopoverTitle className="sr-only">选择设备日期</PopoverTitle>
+        <PopoverTitle className="sr-only">选择日期</PopoverTitle>
         <Calendar
           mode="single"
           required

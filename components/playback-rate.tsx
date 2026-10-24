@@ -4,14 +4,8 @@ import { useId, useState, type RefObject } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
 import {
   Popover,
   PopoverContent,
@@ -32,8 +26,10 @@ export function PlaybackRate({
 }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState(String(value))
+  const [customMode, setCustomMode] = useState(!rates.includes(value))
   const [error, setError] = useState("")
   const id = useId()
+  const portalContainer = useFullscreenContainer(container)
   function apply(rate: number) {
     if (!Number.isFinite(rate) || rate < 0.25 || rate > 4) {
       setError("请输入 0.25–4 之间的倍速。")
@@ -54,6 +50,7 @@ export function PlaybackRate({
         setOpen(next)
         if (next) {
           setCustom(String(value))
+          setCustomMode(!rates.includes(value))
           setError("")
         }
       }}
@@ -71,7 +68,7 @@ export function PlaybackRate({
         {value}×
       </PopoverTrigger>
       <PopoverContent
-        container={container}
+        container={portalContainer}
         side="top"
         align="start"
         className="w-60"
@@ -79,75 +76,78 @@ export function PlaybackRate({
         <PopoverTitle>播放倍速</PopoverTitle>
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor={`${id}-preset`} className="sr-only">
+            <FieldLabel id={`${id}-preset`} className="sr-only">
               倍速档位
             </FieldLabel>
-            <Select
-              items={[
-                ...rates.map((rate) => ({
-                  label: `${rate}×`,
-                  value: String(rate),
-                })),
-                { label: "自定义", value: "custom" },
-              ]}
-              value={rates.includes(value) ? String(value) : "custom"}
-              onValueChange={(next) => {
-                if (next !== null && next !== "custom") apply(Number(next))
+            <ToggleGroup
+              aria-labelledby={`${id}-preset`}
+              className="grid w-full grid-cols-4"
+              value={rates.includes(value) ? [String(value)] : []}
+              variant="outline"
+              size="sm"
+              onValueChange={(values) => {
+                if (values[0]) apply(Number(values[0]))
               }}
             >
-              <SelectTrigger id={`${id}-preset`} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent container={container} alignItemWithTrigger={false}>
-                <SelectGroup>
-                  {rates.map((rate) => (
-                    <SelectItem key={rate} value={String(rate)}>
-                      {rate}×
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="custom">自定义</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              {rates.map((rate) => (
+                <ToggleGroupItem key={rate} value={String(rate)}>
+                  {rate}×
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
           </Field>
-          <Field data-invalid={!!error}>
-            <FieldLabel htmlFor={`${id}-custom`}>自定义倍速</FieldLabel>
-            <form
-              className="flex items-center gap-2"
-              noValidate
-              onSubmit={(event) => {
-                event.preventDefault()
-                apply(custom.trim() ? Number(custom) : NaN)
-              }}
-            >
-              <Input
-                id={`${id}-custom`}
-                type="number"
-                min="0.25"
-                max="4"
-                step="0.01"
-                value={custom}
-                aria-invalid={!!error}
-                aria-describedby={error ? `${id}-error` : undefined}
-                onChange={(event) => {
-                  setCustom(event.target.value)
-                  setError("")
+          <Button
+            variant="ghost"
+            className="justify-start"
+            aria-expanded={customMode}
+            aria-controls={`${id}-custom-form`}
+            onClick={() => {
+              setCustomMode((shown) => !shown)
+              setError("")
+            }}
+          >
+            自定义…
+          </Button>
+          {customMode && (
+            <Field data-invalid={!!error} id={`${id}-custom-form`}>
+              <FieldLabel htmlFor={`${id}-custom`}>自定义倍速</FieldLabel>
+              <form
+                className="flex items-center gap-2"
+                noValidate
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  apply(custom.trim() ? Number(custom) : NaN)
                 }}
-              />
-              <Button type="submit" size="sm">
-                应用
-              </Button>
-            </form>
-            {error && (
-              <p
-                id={`${id}-error`}
-                role="alert"
-                className="text-sm text-destructive"
               >
-                {error}
-              </p>
-            )}
-          </Field>
+                <Input
+                  id={`${id}-custom`}
+                  type="number"
+                  min="0.25"
+                  max="4"
+                  step="0.01"
+                  value={custom}
+                  aria-invalid={!!error}
+                  aria-describedby={error ? `${id}-error` : undefined}
+                  onChange={(event) => {
+                    setCustom(event.target.value)
+                    setError("")
+                  }}
+                />
+                <Button type="submit" size="sm">
+                  应用
+                </Button>
+              </form>
+            </Field>
+          )}
+          {error && (
+            <p
+              id={`${id}-error`}
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {error}
+            </p>
+          )}
         </FieldGroup>
       </PopoverContent>
     </Popover>

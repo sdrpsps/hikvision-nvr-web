@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
+import { Temporal } from "@js-temporal/polyfill"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { IsapiClient } from "./isapi"
@@ -87,12 +88,17 @@ export class NvrService {
     this.channelsCache = { data, expires: Date.now() + 20000 }
     return data
   }
-  async queryRaw(trackId: string, date: string): Promise<RawSegment[]> {
+  async queryRaw(
+    trackId: string,
+    date: string,
+    signal?: AbortSignal
+  ): Promise<RawSegment[]> {
     if (this.active >= 2)
       throw new AppError("NVR_BUSY", 429, "设备查询繁忙，请稍后重试。")
     this.active++
     const deadline = Date.now() + 30000
     try {
+      signal?.throwIfAborted()
       if (!(await this.channels()).some((channel) => channel.id === trackId))
         throw new AppError("TRACK_NOT_FOUND", 404, "设备中不存在此录像轨道。")
       const range = dayRange(date, this.config.NVR_TIME_ZONE)
@@ -109,6 +115,7 @@ export class NvrService {
         result: RawSegment[] = []
       let offset = 0
       for (let page = 0; page < 100; page++) {
+        signal?.throwIfAborted()
         if (Date.now() >= deadline)
           throw new AppError(
             "NVR_TIMEOUT",
@@ -124,7 +131,8 @@ export class NvrService {
               recordingSearchTime(inclusiveEnd, time),
               searchId,
               offset
-            )
+            ),
+            signal
           ),
           time
         )
@@ -177,6 +185,7 @@ export class NvrService {
     }
   }
   async resolveSegment(trackId: string, date: string, id: string) {
+    const started = Date.now()
     const segment = (await this.queryRaw(trackId, date)).find(
       (segment) =>
         createHmac("sha256", this.key)
@@ -190,7 +199,102 @@ export class NvrService {
         404,
         "录像已变化，请刷新查询后重试。"
       )
-    return segment
+    const estimatedDurationSeconds = await this.estimateDuration(
+      segment,
+      date,
+      Date.now() - started < 5000
+    )
+    return estimatedDurationSeconds === undefined
+      ? segment
+      : { ...segment, estimatedDurationSeconds }
+  }
+  private async estimateDuration(
+    segment: RawSegment,
+    date: string,
+    allowNeighbors: boolean
+  ) {
+    const range = dayRange(date, this.config.NVR_TIME_ZONE)
+    const start = Date.parse(segment.startAt)
+    const end = Date.parse(segment.endAt)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return
+    if (start > Date.parse(range.startAt) && end < Date.parse(range.endAt))
+      return (end - start) / 1000
+    if (!allowNeighbors) return
+
+    // A day query may label only part of a file. Neighbor searches enrich the
+    // estimate without replacing the original download URI or time labels.
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      const identity = (uri: string) => {
+        const params = validatePlaybackUri(uri, this.config).searchParams
+        if (
+          params.getAll("name").length !== 1 ||
+          params.getAll("size").length !== 1
+        )
+          return
+        const name = params.get("name")
+        const size = params.get("size")
+        if (!name?.trim() || !size?.trim()) return
+        return { name, size }
+      }
+      const file = identity(segment.playbackURI)
+      if (!file) return
+      const day = Temporal.PlainDate.from(date)
+      const dates: string[] = []
+      if (start <= Date.parse(range.startAt))
+        dates.push(day.subtract({ days: 1 }).toString())
+      if (end >= Date.parse(range.endAt))
+        dates.push(day.add({ days: 1 }).toString())
+      const controller = new AbortController()
+      timeout = setTimeout(() => controller.abort(), 1500)
+      const neighbors = await Promise.allSettled(
+        dates.map((neighbor) =>
+          this.queryRaw(segment.trackId, neighbor, controller.signal)
+        )
+      )
+      const intervals = [{ start, end }]
+      let outerStart = Date.parse(range.startAt)
+      let outerEnd = Date.parse(range.endAt)
+      for (const [index, result] of neighbors.entries()) {
+        if (result.status === "rejected") return
+        const neighborRange = dayRange(dates[index], this.config.NVR_TIME_ZONE)
+        const neighborStart = Date.parse(neighborRange.startAt)
+        const neighborEnd = Date.parse(neighborRange.endAt)
+        outerStart = Math.min(outerStart, neighborStart)
+        outerEnd = Math.max(outerEnd, neighborEnd)
+        const matches = result.value.filter((candidate) => {
+          if (candidate.trackId !== segment.trackId) return false
+          const candidateFile = identity(candidate.playbackURI)
+          return (
+            candidateFile?.name === file.name &&
+            candidateFile.size === file.size &&
+            Date.parse(candidate.startAt) < neighborEnd &&
+            Date.parse(candidate.endAt) > neighborStart
+          )
+        })
+        if (!matches.length) return
+        for (const match of matches) {
+          const start = Date.parse(match.startAt)
+          const end = Date.parse(match.endAt)
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+            return
+          intervals.push({ start, end })
+        }
+      }
+      intervals.sort((a, b) => a.start - b.start)
+      const mergedStart = intervals[0].start
+      let mergedEnd = intervals[0].end
+      for (const interval of intervals.slice(1)) {
+        if (interval.start > mergedEnd) return
+        mergedEnd = Math.max(mergedEnd, interval.end)
+      }
+      if (mergedStart > outerStart && mergedEnd < outerEnd)
+        return (mergedEnd - mergedStart) / 1000
+    } catch {
+      // Optional metadata must never block an otherwise valid file download.
+    } finally {
+      clearTimeout(timeout)
+    }
   }
   async recordings(trackId: string, date: string): Promise<Recordings> {
     const key = `${trackId}|${date}`,

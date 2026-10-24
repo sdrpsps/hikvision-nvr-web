@@ -8,7 +8,11 @@ export class IsapiClient {
     private config: NvrConfig,
     private fetcher: typeof fetch = fetch
   ) {}
-  async request(path: string, body?: string): Promise<string> {
+  async request(
+    path: string,
+    body?: string,
+    signal?: AbortSignal
+  ): Promise<string> {
     if (
       ![
         "/ISAPI/System/deviceInfo",
@@ -28,15 +32,19 @@ export class IsapiClient {
       () => controller.abort(),
       this.config.NVR_TIMEOUT_MS
     )
+    const requestSignal = signal
+      ? AbortSignal.any([controller.signal, signal])
+      : controller.signal
     let authorization: string | undefined
     try {
       // One challenge + at most two authenticated requests (including stale nonce).
       for (let attempt = 0; attempt < 3; attempt++) {
+        requestSignal.throwIfAborted()
         const response = await this.fetcher(url, {
           method,
           body,
           redirect: "manual",
-          signal: controller.signal,
+          signal: requestSignal,
           headers: {
             Accept: "application/xml",
             ...(body ? { "Content-Type": "application/xml" } : {}),
@@ -100,7 +108,7 @@ export class IsapiClient {
       throw new AppError("NVR_AUTH_FAILED", 502, "设备认证失败。")
     } catch (error) {
       if (error instanceof AppError) throw error
-      if (controller.signal.aborted)
+      if (requestSignal.aborted)
         throw new AppError(
           "NVR_TIMEOUT",
           504,

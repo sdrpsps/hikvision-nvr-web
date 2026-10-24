@@ -82,6 +82,7 @@ export type RawSegment = {
   playbackURI: string
   codec?: string
   recordType?: string
+  estimatedDurationSeconds?: number
 }
 export function parseSearch(
   xml: string,

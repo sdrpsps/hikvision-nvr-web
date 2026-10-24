@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { test, expect, type Page } from "@playwright/test"
-import { selectDate, selectOption } from "./controls"
+import { selectDate } from "./controls"
 import { splitFragmentedMp4, mp4Boxes } from "../../server/mp4"
 import { copiedAudio } from "../../server/live-audio"
 const audioFile = readFileSync(
@@ -197,6 +197,12 @@ for (const codec of ["h264", "hevc"] as const) {
       })
     })
     await mockQueries(page)
+    const playerBox = await page.locator(".playback-player").boundingBox()
+    const timelineBox = await page
+      .locator(".recording-distribution")
+      .boundingBox()
+    expect(playerBox!.width).toBeCloseTo(timelineBox!.width, 0)
+    expect(playerBox!.x).toBeCloseTo(timelineBox!.x, 0)
     const idle = await page.locator(".stream-idle").boundingBox()
     expect(idle!.width / idle!.height).toBeCloseTo(16 / 9, 2)
     await expect(page.getByText("画面未开启", { exact: true })).toBeVisible()
@@ -226,15 +232,30 @@ for (const codec of ["h264", "hevc"] as const) {
       page.getByRole("button", { name: "暂停录像", exact: true })
     ).toBeVisible()
     await expect(page.getByRole("button", { name: "关闭回放" })).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "从头播放", exact: true })
+    ).toHaveCount(0)
+    await page
+      .getByRole("button", { name: "更多播放操作", exact: true })
+      .click()
+    await expect(
+      page.getByRole("button", { name: "从头播放", exact: true })
+    ).toBeVisible()
+    expect(
+      await page
+        .locator('[data-slot="popover-content"]')
+        .evaluate((element) => document.fullscreenElement?.contains(element))
+    ).toBe(true)
+    await page.keyboard.press("Escape")
     await page.getByRole("button", { name: "播放倍速" }).click()
-    await selectOption(page, "倍速档位", "1.25×")
+    await page.getByRole("button", { name: "1.25×", exact: true }).click()
     await expect
       .poll(() =>
         page.locator("video").evaluate((v: HTMLVideoElement) => v.playbackRate)
       )
       .toBe(1.25)
     await page.getByRole("button", { name: "播放倍速" }).click()
-    await selectOption(page, "倍速档位", "1×")
+    await page.getByRole("button", { name: "1×", exact: true }).click()
     await page.evaluate(() => document.exitFullscreen())
     await playAndSeek(page, 1)
     await page.getByRole("switch", { name: "声音" }).click()
@@ -249,7 +270,7 @@ for (const codec of ["h264", "hevc"] as const) {
       )
       .toBeGreaterThan(0.1)
     await page.getByRole("button", { name: "播放倍速" }).click()
-    await selectOption(page, "倍速档位", "2×")
+    await page.getByRole("button", { name: "2×", exact: true }).click()
     await expect
       .poll(() =>
         page.locator("video").evaluate((v: HTMLVideoElement) => v.playbackRate)
@@ -265,6 +286,8 @@ for (const codec of ["h264", "hevc"] as const) {
       )
       .toBe(true)
     await page.getByRole("button", { name: "播放倍速" }).click()
+    await expect(page.getByLabel("自定义倍速")).toHaveCount(0)
+    await page.getByRole("button", { name: "自定义…", exact: true }).click()
     await page.getByLabel("自定义倍速").fill("1.35")
     await page.getByRole("button", { name: "应用", exact: true }).click()
     await expect
@@ -383,7 +406,7 @@ test("preview failures remain retryable and pending preparation can cancel", asy
   await mockQueries(page)
   await page.getByRole("button", { name: "播放" }).click()
   await expect(page.getByText("读取录像中断，请重试。")).toBeVisible()
-  await page.getByRole("button", { name: "播放" }).click()
+  await page.getByRole("button", { name: "重试", exact: true }).click()
   await expect(page.getByText("正在准备预览，请稍候…")).toBeVisible()
   await page.getByRole("button", { name: "取消准备" }).click()
   await expect(page.getByRole("button", { name: "播放" })).toBeEnabled()
@@ -509,6 +532,155 @@ async function endSequenceVideo(page: Page) {
   })
 }
 
+async function mockProgressivePlayback(page: Page, estimate?: number) {
+  const state = { available: 3, complete: false }
+  const media = mediaByCodec.h264
+  // The second synthetic fragment starts at 3 seconds in the same media clock.
+  const next = Buffer.from(media.media)
+  const mdhd = media.init.indexOf("mdhd")
+  const timescale = media.init.readUInt32BE(mdhd + 16)
+  const tfdt = next.indexOf("tfdt")
+  if (next[tfdt + 4] === 1)
+    next.writeBigUInt64BE(
+      next.readBigUInt64BE(tfdt + 8) + BigInt(timescale * 3),
+      tfdt + 8
+    )
+  else next.writeUInt32BE(next.readUInt32BE(tfdt + 8) + timescale * 3, tfdt + 8)
+  await page.route("**/api/streams/**", (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (route.request().method() === "POST")
+      return route.fulfill({
+        status: 201,
+        json: {
+          id,
+          playlistUrl: `/api/streams/${id}/index.m3u8`,
+          durationSeconds: 3,
+          estimatedDurationSeconds: estimate,
+          expiresAt: new Date(Date.now() + 120000).toISOString(),
+          mode: "stream-copy",
+          codec: "h264",
+        },
+      })
+    if (route.request().method() === "DELETE")
+      return route.fulfill({ status: 204 })
+    if (path.endsWith("/status"))
+      return route.fulfill({
+        json: {
+          complete: state.complete,
+          durationSeconds: state.available,
+          estimatedDurationSeconds: estimate,
+          ...(state.complete ? { totalDurationSeconds: state.available } : {}),
+        },
+      })
+    if (path.endsWith("index.m3u8"))
+      return route.fulfill({
+        contentType: "application/vnd.apple.mpegurl",
+        body: `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:3.000000,\n0.m4s\n${state.available > 3 ? "#EXTINF:3.000000,\n1.m4s\n" : ""}${state.complete ? "#EXT-X-ENDLIST\n" : ""}`,
+      })
+    return route.fulfill({
+      contentType: path.endsWith("init.mp4")
+        ? "video/mp4"
+        : "video/iso.segment",
+      body: path.endsWith("init.mp4")
+        ? media.init
+        : path.endsWith("1.m4s")
+          ? next
+          : media.media,
+    })
+  })
+  await mockQueries(page)
+  await page.getByRole("button", { name: "播放", exact: true }).click()
+  await pauseSequenceVideo(page)
+  return state
+}
+
+test("progressive playback keeps its scale, waits for a requested time and calibrates at completion", async ({
+  page,
+}) => {
+  const state = await mockProgressivePlayback(page, 60)
+  const slider = page.getByRole("slider", { name: "播放进度" })
+  await expect(slider).toHaveAttribute("max", "60")
+  await expect(page.getByText("约 01:00", { exact: true })).toBeVisible()
+  await slider.fill("5")
+  await expect(
+    page.getByText("正在读取至 00:05，已读取至 00:03", { exact: true })
+  ).toBeVisible()
+  expect(
+    await page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime)
+  ).toBeLessThan(3)
+  await page.getByRole("button", { name: "取消定位" }).click()
+  await page.getByRole("button", { name: "定位时间" }).click()
+  await page
+    .getByRole("textbox", { name: "文件内时间", exact: true })
+    .fill("00:99")
+  await page.getByRole("button", { name: "跳转", exact: true }).click()
+  await expect(
+    page.getByText("请输入分:秒或时:分:秒，例如 01:20:00。", { exact: true })
+  ).toBeVisible()
+  await page
+    .getByRole("textbox", { name: "文件内时间", exact: true })
+    .fill("00:05")
+  await page.getByRole("button", { name: "跳转", exact: true }).click()
+  state.available = 6
+  await expect
+    .poll(
+      () =>
+        page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime),
+      { timeout: 15000 }
+    )
+    .toBeCloseTo(5, 0)
+  await expect(page.getByRole("button", { name: "取消定位" })).toHaveCount(0)
+  await expect(slider).toHaveAttribute("max", "60")
+  expect(
+    await page.locator("video").evaluate((v: HTMLVideoElement) => v.paused)
+  ).toBe(true)
+  state.complete = true
+  await expect(slider).toHaveAttribute("max", "6")
+  await expect(page.getByText("约 01:00", { exact: true })).toHaveCount(0)
+  await page.getByRole("button", { name: "定位时间" }).click()
+  await page
+    .getByRole("textbox", { name: "文件内时间", exact: true })
+    .fill("00:10")
+  await page.getByRole("button", { name: "跳转", exact: true }).click()
+  await expect(
+    page.getByText("目标超出录像范围，文件总时长为 00:06。", { exact: true })
+  ).toBeVisible()
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "关闭回放" }).click()
+})
+
+test("unknown total does not grow a false scale and a waiting target can be replaced or rejected", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  const state = await mockProgressivePlayback(page)
+  const slider = page.getByRole("slider", { name: "播放进度" })
+  await expect(slider).toBeDisabled()
+  await expect(page.getByText("时长确认中", { exact: true })).toBeVisible()
+  for (const time of ["01:00", "00:10"]) {
+    await page.getByRole("button", { name: "定位时间" }).click()
+    await page
+      .getByRole("textbox", { name: "文件内时间", exact: true })
+      .fill(time)
+    await page.getByRole("button", { name: "跳转", exact: true }).click()
+    await expect(
+      page.getByText(`正在读取至 ${time}，已读取至 00:03`, { exact: true })
+    ).toBeVisible()
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth
+    )
+  ).toBe(true)
+  state.complete = true
+  await expect(
+    page.getByText("目标超出录像范围，文件总时长为 00:03。", { exact: true })
+  ).toBeVisible()
+  await expect(slider).toHaveAttribute("max", "3")
+  await expect(page.getByRole("button", { name: "取消定位" })).toHaveCount(0)
+  await page.getByRole("button", { name: "关闭回放" }).click()
+})
+
 test("continuous playback confirms completion, releases before next file and preserves controls", async ({
   page,
 }) => {
@@ -519,7 +691,7 @@ test("continuous playback confirms completion, releases before next file and pre
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await pauseSequenceVideo(page)
   await page.getByRole("button", { name: "播放倍速" }).click()
-  await selectOption(page, "倍速档位", "2×")
+  await page.getByRole("button", { name: "2×", exact: true }).click()
   await page.getByRole("switch", { name: "声音", exact: true }).click()
   await page.locator("video").dispatchEvent("ended")
   expect(events.filter((event) => event === "status")).toHaveLength(0)
@@ -647,7 +819,7 @@ test("continuous playback is opt-in and a failed next file does not loop retries
   await expect(page.getByRole("switch", { name: "连续播放" })).not.toBeChecked()
   expect(posts).toHaveLength(2)
   await expect(
-    page.getByRole("button", { name: "播放", exact: true })
+    page.getByRole("button", { name: "重试", exact: true })
   ).toBeEnabled()
 })
 
@@ -713,7 +885,7 @@ test("a stalled playback preparation times out and stops the sequence", async ({
   await expect(page.getByText("准备预览超时，请重试。")).toBeVisible()
   await expect(page.getByRole("switch", { name: "连续播放" })).not.toBeChecked()
   await expect(
-    page.getByRole("button", { name: "播放", exact: true })
+    page.getByRole("button", { name: "重试", exact: true })
   ).toBeEnabled()
   await expect(page.locator("video")).toHaveCount(0)
   expect(attempts).toBe(1)
@@ -742,7 +914,7 @@ test("real LAN preview: browser decoding, pause/seek and repeated cleanup", asyn
   const errors: string[] = []
   page.on("pageerror", (error) => errors.push(error.name))
   await page.goto("/playback")
-  await expect(page.getByLabel("设备日期")).toBeEnabled()
+  await expect(page.getByLabel("日期", { exact: true })).toBeEnabled()
   await selectDate(page, "2026-10-17")
   await expect(page.getByText("13 个录像片段")).toBeVisible()
   await page.locator(".timeline-segment").first().click()
@@ -781,7 +953,7 @@ test("real LAN preview: browser decoding, pause/seek and repeated cleanup", asyn
           )
           .toBeGreaterThan(0)
         await page.getByRole("button", { name: "播放倍速" }).click()
-        await selectOption(page, "倍速档位", "2×")
+        await page.getByRole("button", { name: "2×", exact: true }).click()
         await expect
           .poll(() =>
             page.evaluate(() =>

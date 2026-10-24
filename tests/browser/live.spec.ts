@@ -31,8 +31,9 @@ for (const mobile of [false, true])
     await channels(page)
     await page.goto("/")
     await expect(
-      page.getByRole("heading", { name: "实时预览", exact: true })
-    ).toBeVisible()
+      page.getByRole("link", { name: "实时预览", exact: true })
+    ).toHaveAttribute("aria-current", "page")
+    await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
     await expect(page.locator(".video-wall-cell")).toHaveCount(4)
     await expect(
       page.getByRole("button", { name: "4 路", exact: true })
@@ -51,15 +52,58 @@ for (const mobile of [false, true])
           () => document.documentElement.scrollWidth <= innerWidth
         )
       ).toBe(true)
+      if (!mobile) {
+        expect(
+          await page.locator(".live-wall-viewport").evaluate((viewport) => ({
+            verticalFits: viewport.scrollHeight <= viewport.clientHeight + 1,
+            horizontalFits: viewport.scrollWidth <= viewport.clientWidth + 1,
+          }))
+        ).toEqual({ verticalFits: true, horizontalFits: true })
+      }
     }
     await page.getByRole("button", { name: "选择窗口 2", exact: true }).click()
-    await page
-      .getByRole("button", { name: "摄像头 3 301", exact: true })
-      .click()
+    await page.getByRole("button", { name: "摄像头 3", exact: true }).click()
     await expect(page.getByLabel("窗口 2 通道", { exact: true })).toContainText(
       "摄像头 3"
     )
     await selectOption(page, "窗口 2 通道", "摄像头 4")
+    const collapse = page.getByRole("button", { name: "收起通道" })
+    await collapse.focus()
+    await collapse.press("Enter")
+    await expect(
+      page.getByRole("complementary", { name: "设备通道" })
+    ).toHaveCount(0)
+    await expect(
+      page.getByRole("button", { name: "展开通道" })
+    ).toHaveAttribute("aria-expanded", "false")
+    await selectOption(page, "窗口 2 通道", "摄像头 5")
+    await expect(page.getByLabel("窗口 2 通道", { exact: true })).toContainText(
+      "摄像头 5"
+    )
+    await page.getByRole("button", { name: "展开通道" }).click()
+    await expect(
+      page.getByRole("complementary", { name: "设备通道" })
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "摄像头 5", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
+    if (mobile) {
+      await page.setViewportSize({ width: 375, height: 1200 })
+      await page.getByRole("button", { name: "1 路", exact: true }).click()
+      await page.getByRole("button", { name: "收起通道" }).click()
+      await expect
+        .poll(() =>
+          page.locator(".live-stage").evaluate((stage) => {
+            const workspace = stage.parentElement!
+            return Math.abs(
+              stage.getBoundingClientRect().top -
+                workspace.getBoundingClientRect().top -
+                workspace.clientTop
+            )
+          })
+        )
+        .toBeLessThan(1)
+    }
     expect(mediaRequests).toEqual([])
   })
 for (const codec of ["h264", "hevc"] as const)
@@ -125,6 +169,12 @@ for (const codec of ["h264", "hevc"] as const)
       )
       .toBeGreaterThan(3)
     expect(bodies).toEqual([{ track: "101" }])
+    await expect(page.getByRole("button", { name: "全部停止" })).toBeEnabled()
+    await page.getByRole("button", { name: "收起通道" }).click()
+    await expect(window1.locator("video")).toHaveCount(1)
+    expect(deleted).toEqual([])
+    expect(bodies).toEqual([{ track: "101" }])
+    await page.getByRole("button", { name: "展开通道" }).click()
     await selectOption(page, "窗口 1 通道", "摄像头 2")
     await expect.poll(() => deleted.length).toBe(1)
     await expect(page.locator("video")).toHaveCount(0)
@@ -169,8 +219,10 @@ test("live start failure can retry and preparation can cancel", async ({
   const first = page.getByRole("region", { name: "窗口 1", exact: true })
   await first.getByRole("button", { name: "开始预览" }).click()
   await expect(page.getByText("实时连接超时。")).toBeVisible()
-  await first.getByRole("button", { name: "开始预览" }).click()
+  await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
+  await first.getByRole("button", { name: "重试", exact: true }).click()
   await expect(first.getByRole("status")).toHaveText("正在准备预览，请稍候…")
+  await expect(page.getByRole("button", { name: "全部停止" })).toBeEnabled()
   for (const width of [1440, 1280, 375]) {
     await page.setViewportSize({ width, height: 1000 })
     for (const count of [4, 16]) {
@@ -201,6 +253,7 @@ test("live start failure can retry and preparation can cancel", async ({
   await first.getByRole("button", { name: "取消准备" }).click()
   finishPreparation()
   await expect(first.getByRole("button", { name: "开始预览" })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
   await expect(page.locator("video")).toHaveCount(0)
 })
 test("channel failure retries; empty channels disable playback", async ({
@@ -590,7 +643,7 @@ for (const codec of ["h264", "hevc"] as const)
               .getBoundingClientRect()
             const controls = Array.from(
               element.querySelectorAll(
-                '[role="switch"],button[aria-label="全屏"],button[aria-label="重新连接"],button[aria-label="停止预览"]'
+                '[role="switch"],button[aria-label="全屏"],button[aria-label="更多播放操作"],button[aria-label="停止预览"]'
               )
             ).map((el) => {
               const r = el.getBoundingClientRect()
@@ -622,6 +675,29 @@ for (const codec of ["h264", "hevc"] as const)
           })
       }
     }
+    await page.setViewportSize({ width: 800, height: 900 })
+    await page.getByRole("button", { name: "16 路", exact: true }).click()
+    await first
+      .getByRole("button", { name: "更多播放操作", exact: true })
+      .click()
+    const restart = page.getByRole("button", { name: "重新连接", exact: true })
+    await expect(restart).toBeVisible()
+    expect(
+      await restart.evaluate((button) => {
+        const popup = button.closest('[data-slot="popover-content"]')!
+        const bounds = popup.getBoundingClientRect()
+        const points = [
+          [bounds.left + 10, bounds.top + 10],
+          [bounds.right - 10, bounds.top + 10],
+          [bounds.left + 10, bounds.bottom - 10],
+          [bounds.right - 10, bounds.bottom - 10],
+        ]
+        return points.every(([x, y]) =>
+          popup.contains(document.elementFromPoint(x, y))
+        )
+      })
+    ).toBe(true)
+    await page.keyboard.press("Escape")
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.getByRole("button", { name: "4 路", exact: true }).click()
     await first.getByRole("button", { name: "全屏", exact: true }).click()

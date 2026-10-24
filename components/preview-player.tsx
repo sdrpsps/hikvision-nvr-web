@@ -7,37 +7,36 @@ import {
   useRef,
   useState,
   type Ref,
+  type RefObject,
+  type ReactNode,
 } from "react"
-import { PlayIcon, RefreshCwIcon, XIcon, VideoIcon } from "lucide-react"
+import { EllipsisIcon, PlayIcon, RefreshCwIcon, XIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
   EmptyHeader,
-  EmptyMedia,
   EmptyTitle,
   EmptyDescription,
 } from "@/components/ui/empty"
-import {
-  errorSchema,
-  liveSchema,
-  previewSchema,
-  playbackStatusSchema,
-  type Preview,
-  type LiveStream,
-} from "@/shared/contracts"
+import type { Preview, LiveStream } from "@/shared/contracts"
 import { HlsVideo, type PlaybackPreferences } from "@/components/hls-video"
 import { VideoWall } from "@/components/video-wall"
+import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
+import {
+  useCreateLiveStream,
+  useCreatePlaybackStream,
+  useDeleteStream,
+  usePlaybackStatus,
+} from "@/hooks/use-stream-api"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 
-function release(id: string) {
-  return fetch(`/api/streams/${id}`, {
-    method: "DELETE",
-    keepalive: true,
-    signal: AbortSignal.timeout(8000),
-  })
-    .then((response) => response.ok)
-    .catch(() => false)
-}
 type Source =
   | { track: string; date: string; segmentId: string; live?: false }
   | { track: string; live: true }
@@ -49,6 +48,8 @@ type PlaybackOptions = {
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onPlaybackEnded?: () => void
   onStop?: () => void
+  playbackControls?: ReactNode
+  onActivityChange?: (active: boolean) => void
 }
 
 export function PreviewPlayer(
@@ -65,9 +66,6 @@ export function PreviewPlayer(
         label="录像预览窗口"
         renderWindow={() => (
           <section className="live-window" aria-label="录像回放窗口">
-            <div className="window-heading">
-              <h3>录像回放</h3>
-            </div>
             <StreamPlayer {...props} />
           </section>
         )}
@@ -81,9 +79,13 @@ export function StreamPlayer({
   ...props
 }: Source & PlaybackOptions & { ref?: Ref<StreamPlayerHandle> }) {
   const { track, live = false } = props
+  const { mutateAsync: createLive } = useCreateLiveStream()
+  const { mutateAsync: createPlayback } = useCreatePlaybackStream()
+  const { mutateAsync: release } = useDeleteStream()
   const request = useRef<AbortController | null>(null)
   const activeId = useRef<string | null>(null)
   const ending = useRef<AbortController | null>(null)
+  const frame = useRef<HTMLDivElement>(null)
   const callbacks = useRef(props)
   useEffect(() => {
     callbacks.current = props
@@ -92,73 +94,57 @@ export function StreamPlayer({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [expired, setExpired] = useState(false)
-  const onError = useCallback((message: string) => {
-    ending.current?.abort()
-    ending.current = null
-    setError(message)
-    if (activeId.current) release(activeId.current)
-    activeId.current = null
-    setSession(undefined)
-    callbacks.current.onStop?.()
-  }, [])
+  const {
+    data: playbackStatus,
+    error: statusError,
+    confirm: confirmPlayback,
+  } = usePlaybackStatus(!live && !expired ? session?.id : undefined)
   useEffect(() => {
-    if (live || !session) return
-    const controller = new AbortController()
-    let pending = false
-    const timer = setInterval(() => {
-      if (pending) return
-      pending = true
-      void fetch(`/api/streams/${session.id}/status`, {
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
-      })
-        .then(async (response) => {
-          const body: unknown = await response.json()
-          if (response.ok && playbackStatusSchema.safeParse(body).success)
-            return
-          const error = errorSchema.safeParse(body)
-          throw new Error(
-            error.success
-              ? error.data.error.message
-              : "回放连接中断，请重新播放。"
-          )
-        })
-        .catch((error: unknown) => {
-          if (!controller.signal.aborted)
-            onError(
-              error instanceof Error
-                ? error.message
-                : "回放连接中断，请重新播放。"
-            )
-        })
-        .finally(() => {
-          pending = false
-        })
-    }, 20_000)
+    callbacks.current.onActivityChange?.(loading || !!session)
+  }, [loading, session])
+  const onError = useCallback(
+    (message: string) => {
+      ending.current?.abort()
+      ending.current = null
+      setError(message)
+      if (activeId.current) void release(activeId.current)
+      activeId.current = null
+      setSession(undefined)
+      callbacks.current.onStop?.()
+    },
+    [release]
+  )
+  useEffect(() => {
+    if (!statusError) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) onError(statusError.message)
+    })
     return () => {
-      clearInterval(timer)
-      controller.abort()
+      cancelled = true
     }
-  }, [live, session, onError])
+  }, [statusError, onError])
   useEffect(() => {
     const cleanup = () => {
       request.current?.abort()
       ending.current?.abort()
-      if (activeId.current) release(activeId.current)
+      if (activeId.current) void release(activeId.current)
       activeId.current = null
     }
     window.addEventListener("pagehide", cleanup)
     return () => {
       window.removeEventListener("pagehide", cleanup)
       cleanup()
+      callbacks.current.onActivityChange?.(false)
     }
-  }, [])
+  }, [release])
   useEffect(() => {
     if (!session) return
     const timer = setTimeout(
       () => {
         setExpired(true)
         if (activeId.current === session.id) {
-          release(session.id)
+          void release(session.id)
           activeId.current = null
         }
         if (live) setSession(undefined)
@@ -166,19 +152,19 @@ export function StreamPlayer({
       Math.max(0, Date.parse(session.expiresAt) - Date.now())
     )
     return () => clearTimeout(timer)
-  }, [session, live])
+  }, [session, live, release])
   const close = useCallback(() => {
     request.current?.abort()
     ending.current?.abort()
     ending.current = null
     request.current = null
-    if (activeId.current) release(activeId.current)
+    if (activeId.current) void release(activeId.current)
     activeId.current = null
     setSession(undefined)
     setLoading(false)
     setExpired(false)
     setError("")
-  }, [])
+  }, [release])
   const sourceDate = props.live ? undefined : props.date
   const sourceSegment = props.live ? undefined : props.segmentId
   const prepare = useCallback(async () => {
@@ -187,37 +173,20 @@ export function StreamPlayer({
     request.current = controller
     setLoading(true)
     try {
-      const response = await fetch(
-        live ? "/api/streams/live" : "/api/streams/playback",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            live
-              ? { track }
-              : { track, date: sourceDate, segmentId: sourceSegment }
-          ),
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(live ? 25_000 : 35_000),
-          ]),
-        }
-      )
-      const body: unknown = await response.json()
-      if (!response.ok) {
-        const parsed = errorSchema.safeParse(body)
-        throw new Error(
-          parsed.success ? parsed.data.error.message : "预览准备失败，请重试。"
-        )
-      }
-      const parsed = (live ? liveSchema : previewSchema).safeParse(body)
-      if (!parsed.success) throw new Error("预览响应不完整，请重新查询。")
+      const session = live
+        ? await createLive({ track, signal: controller.signal })
+        : await createPlayback({
+            track,
+            date: sourceDate!,
+            segmentId: sourceSegment!,
+            signal: controller.signal,
+          })
       if (controller.signal.aborted) {
-        release(parsed.data.id)
+        void release(session.id)
         return
       }
-      activeId.current = parsed.data.id
-      setSession(parsed.data)
+      activeId.current = session.id
+      setSession(session)
     } catch (error) {
       if (!controller.signal.aborted) {
         setError(
@@ -235,7 +204,16 @@ export function StreamPlayer({
         setLoading(false)
       }
     }
-  }, [close, live, track, sourceDate, sourceSegment])
+  }, [
+    close,
+    createLive,
+    createPlayback,
+    release,
+    live,
+    track,
+    sourceDate,
+    sourceSegment,
+  ])
   useEffect(() => {
     if (!props.autoStart || live) return
     let cancelled = false
@@ -253,15 +231,9 @@ export function StreamPlayer({
     const controller = new AbortController()
     ending.current = controller
     try {
-      const response = await fetch(`/api/streams/${id}/status`, {
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
-      })
-      const body: unknown = await response.json()
+      const status = await confirmPlayback(controller.signal)
       if (controller.signal.aborted || activeId.current !== id) return
-      const parsed = playbackStatusSchema.safeParse(body)
-      if (!response.ok || !parsed.success)
-        throw new Error("无法确认录像读取状态，请重新播放。")
-      if (!parsed.data.complete) {
+      if (!status.complete) {
         setError("录像尚未读取完成，请稍后继续播放。")
         return
       }
@@ -286,17 +258,12 @@ export function StreamPlayer({
       if (track && !activeId.current && !request.current) void prepare()
     },
   }))
-  const startLabel = session
-    ? live
-      ? "重新连接"
-      : "重新播放"
-    : live
-      ? "开始预览"
-      : "播放"
+  const restartLabel = live ? "重新连接" : "从头播放"
+  const startLabel = error || expired ? "重试" : live ? "开始预览" : "播放"
   const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
     <div className="preview-actions">
-      {!loading && (
+      {!loading && (!session || error || expired) && (
         <Button
           size="sm"
           disabled={!track}
@@ -304,13 +271,20 @@ export function StreamPlayer({
           title={startLabel}
           onClick={() => void prepare()}
         >
-          {session ? (
+          {error || expired ? (
             <RefreshCwIcon data-icon="inline-start" />
           ) : (
             <PlayIcon data-icon="inline-start" />
           )}
           <span className="control-label">{startLabel}</span>
         </Button>
+      )}
+      {session && !error && !expired && (
+        <RestartAction
+          container={frame}
+          label={restartLabel}
+          onRestart={() => void prepare()}
+        />
       )}
       {(loading || session) && (
         <Button
@@ -329,24 +303,47 @@ export function StreamPlayer({
       )}
     </div>
   )
+  const errorAlert = error && (
+    <Alert variant="destructive">
+      <AlertTitle>预览未完成</AlertTitle>
+      <AlertDescription>{error}</AlertDescription>
+    </Alert>
+  )
   return (
     <section
       className="stream-player"
       aria-label={live ? "实时播放器" : "录像预览"}
+      data-live={live}
+      data-state={
+        error || expired
+          ? "error"
+          : loading
+            ? "loading"
+            : session
+              ? "playing"
+              : "idle"
+      }
     >
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>预览未完成</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+      {live && error ? (
+        <ScrollArea
+          className="live-error-scroll"
+          viewportProps={{ className: "live-error-viewport" }}
+        >
+          {errorAlert}
+        </ScrollArea>
+      ) : (
+        errorAlert
       )}
       {session ? (
         <HlsVideo
           key={session.id}
           session={session}
+          playbackStatus={playbackStatus}
           live={live}
           onError={onError}
           actions={actions}
+          frame={frame}
+          playbackControls={props.playbackControls}
           initialPreferences={props.initialPreferences}
           onPreferencesChange={props.onPreferencesChange}
           onEnded={() => void finishPlayback()}
@@ -354,9 +351,6 @@ export function StreamPlayer({
       ) : (
         <Empty className="stream-idle">
           <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <VideoIcon />
-            </EmptyMedia>
             <EmptyTitle>
               {loading
                 ? live
@@ -364,18 +358,15 @@ export function StreamPlayer({
                   : "正在准备录像"
                 : "画面未开启"}
             </EmptyTitle>
-            {live && (
-              <EmptyDescription>
-                {expired
-                  ? "本次会话已到期，请重新开始预览。"
-                  : "选择通道后，手动开始预览"}
-              </EmptyDescription>
+            {expired && (
+              <EmptyDescription>本次连接已到期，请重试。</EmptyDescription>
             )}
           </EmptyHeader>
         </Empty>
       )}
       {!session && (
         <div className="preview-control-row">
+          {props.playbackControls}
           {loading && (
             <p role="status" className="truncate" title="正在准备预览，请稍候…">
               正在准备预览，请稍候…
@@ -385,5 +376,53 @@ export function StreamPlayer({
         </div>
       )}
     </section>
+  )
+}
+
+function RestartAction({
+  container,
+  label,
+  onRestart,
+}: {
+  container?: RefObject<HTMLDivElement | null>
+  label: string
+  onRestart: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const portalContainer = useFullscreenContainer(container)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="更多播放操作"
+            title="更多播放操作"
+          />
+        }
+      >
+        <EllipsisIcon />
+      </PopoverTrigger>
+      <PopoverContent
+        container={portalContainer}
+        side="top"
+        align="end"
+        className="w-40"
+      >
+        <PopoverTitle className="sr-only">播放操作</PopoverTitle>
+        <Button
+          variant="ghost"
+          className="justify-start"
+          onClick={() => {
+            setOpen(false)
+            onRestart()
+          }}
+        >
+          <RefreshCwIcon data-icon="inline-start" />
+          {label}
+        </Button>
+      </PopoverContent>
+    </Popover>
   )
 }
