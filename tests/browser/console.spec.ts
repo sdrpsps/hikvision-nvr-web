@@ -241,13 +241,18 @@ test("device details load on demand and failures do not block recording queries"
   await expect(deviceDetails).toHaveText("设备信息")
   await expect(page.getByText("北京时间", { exact: true })).toHaveCount(0)
   await deviceDetails.click()
-  await expect(page.getByText("设备信息读取失败")).toBeVisible()
+  const deviceErrorToast = page.locator(
+    '[data-sonner-toast][data-type="error"]'
+  )
+  await expect(deviceErrorToast).toContainText("设备信息读取失败")
+  await expect(deviceErrorToast).toContainText("设备信息暂时不可用。")
   await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
   // Cancelled development mounts do not mean the device has recovered.
   const failedRequests = deviceRequests
   deviceReachable = true
   await page.getByRole("button", { name: "重试", exact: true }).click()
   await expect(page.getByText("TEST-NVR")).toBeVisible()
+  await expect(deviceErrorToast).toHaveCount(0)
   await expect(
     page.getByText("北京时间（UTC+8）", { exact: true })
   ).toBeVisible()

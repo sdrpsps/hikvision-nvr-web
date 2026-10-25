@@ -329,10 +329,26 @@ test("channel failure retries; empty channels disable playback", async ({
         })
   )
   await page.goto("/")
-  await expect(page.getByText("通道读取失败")).toBeVisible()
+  const errorToast = page.locator('[data-sonner-toast][data-type="error"]')
+  await expect(errorToast).toHaveCount(1)
+  await expect(errorToast).toContainText("通道读取失败")
+  await expect(errorToast).toContainText("无法连接设备。")
+  await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
+  await page.getByRole("button", { name: "收起通道", exact: true }).click()
+  await expect(errorToast).toHaveCount(1)
+  await errorToast.getByRole("button", { name: "关闭提示" }).click()
+  await expect(errorToast).toHaveCount(0)
+  await page.getByRole("button", { name: "展开通道", exact: true }).click()
+  await expect(errorToast).toHaveCount(0)
+  // A new failed request must notify again, even with the same message.
+  // Layout changes and dismissal must not replay a cached failure.
+  await page.getByRole("button", { name: "刷新通道" }).click()
+  await expect(errorToast).toHaveCount(1)
+  await expect(errorToast).toContainText("通道读取失败")
   retry = true
   await page.getByRole("button", { name: "刷新通道" }).click()
   await expect(page.getByText("暂无通道")).toBeVisible()
+  await expect(errorToast).toHaveCount(0)
   for (const button of await page
     .getByRole("button", { name: "开始预览" })
     .all())

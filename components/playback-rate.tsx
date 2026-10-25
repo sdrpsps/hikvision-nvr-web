@@ -1,6 +1,7 @@
 "use client"
 
 import { useId, useState, type RefObject } from "react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -37,7 +38,8 @@ export function PlaybackRate({
     }
     rate = Math.round(rate * 100) / 100
     if (!onChange(rate)) {
-      setError("浏览器不支持此倍速。")
+      setError("")
+      toast.error("浏览器不支持此倍速。", { id: `playback-rate-${id}` })
       return
     }
     setError("")

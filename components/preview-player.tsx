@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useId,
   useRef,
   useState,
   type Ref,
@@ -11,8 +12,8 @@ import {
   type ReactNode,
 } from "react"
 import { EllipsisIcon, PlayIcon, RefreshCwIcon, XIcon } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
   EmptyHeader,
@@ -29,7 +30,6 @@ import {
   useDeleteStream,
   usePlaybackStatus,
 } from "@/hooks/use-stream-api"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Popover,
   PopoverContent,
@@ -86,6 +86,8 @@ export function StreamPlayer({
   const { mutateAsync: release } = useDeleteStream()
   const request = useRef<AbortController | null>(null)
   const activeId = useRef<string | null>(null)
+  const failed = useRef(false)
+  const feedbackId = useId()
   const ending = useRef<AbortController | null>(null)
   const frame = useRef<HTMLDivElement>(null)
   const callbacks = useRef(props)
@@ -96,6 +98,15 @@ export function StreamPlayer({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [expired, setExpired] = useState(false)
+  const notifyError = useCallback(
+    (message: string) => {
+      toast.error(message, {
+        id: `preview-${feedbackId}`,
+        description: `${callbacks.current.channelName ?? `通道 ${track}`} · ${live ? "实时预览" : "录像回放"}`,
+      })
+    },
+    [feedbackId, track, live]
+  )
   const {
     data: playbackStatus,
     error: statusError,
@@ -106,15 +117,18 @@ export function StreamPlayer({
   }, [loading, session])
   const onError = useCallback(
     (message: string) => {
+      if (failed.current) return
+      failed.current = true
       ending.current?.abort()
       ending.current = null
       setError(message)
+      notifyError(message)
       if (activeId.current) void release(activeId.current)
       activeId.current = null
       setSession(undefined)
       callbacks.current.onStop?.()
     },
-    [release]
+    [release, notifyError]
   )
   useEffect(() => {
     if (!statusError) return
@@ -155,18 +169,34 @@ export function StreamPlayer({
     )
     return () => clearTimeout(timer)
   }, [session, live, release])
-  const close = useCallback(() => {
-    request.current?.abort()
-    ending.current?.abort()
-    ending.current = null
-    request.current = null
-    if (activeId.current) void release(activeId.current)
-    activeId.current = null
-    setSession(undefined)
-    setLoading(false)
-    setExpired(false)
-    setError("")
-  }, [release])
+  const close = useCallback(
+    (notify = false) => {
+      request.current?.abort()
+      ending.current?.abort()
+      ending.current = null
+      request.current = null
+      if (activeId.current) {
+        void release(activeId.current).then((released) => {
+          if (notify && !released) {
+            toast.warning(
+              "画面已关闭，后台连接未能确认释放，将自动超时回收。",
+              {
+                id: `preview-${feedbackId}`,
+                description: callbacks.current.channelName ?? `通道 ${track}`,
+              }
+            )
+          }
+        })
+      }
+      activeId.current = null
+      failed.current = false
+      setSession(undefined)
+      setLoading(false)
+      setExpired(false)
+      setError("")
+    },
+    [release, feedbackId, track]
+  )
   const sourceDate = props.live ? undefined : props.date
   const sourceSegment = props.live ? undefined : props.segmentId
   const prepare = useCallback(async () => {
@@ -191,14 +221,13 @@ export function StreamPlayer({
       setSession(session)
     } catch (error) {
       if (!controller.signal.aborted) {
-        setError(
+        onError(
           error instanceof DOMException && error.name === "TimeoutError"
             ? "准备预览超时，请重试。"
             : error instanceof Error
               ? error.message
               : "预览准备失败，请重试。"
         )
-        callbacks.current.onStop?.()
       }
     } finally {
       if (request.current === controller) {
@@ -215,6 +244,7 @@ export function StreamPlayer({
     track,
     sourceDate,
     sourceSegment,
+    onError,
   ])
   useEffect(() => {
     if (!props.autoStart || live) return
@@ -236,7 +266,10 @@ export function StreamPlayer({
       const status = await confirmPlayback(controller.signal)
       if (controller.signal.aborted || activeId.current !== id) return
       if (!status.complete) {
-        setError("录像尚未读取完成，请稍后继续播放。")
+        toast.warning("录像尚未读取完成，请稍后继续播放。", {
+          id: `preview-${feedbackId}`,
+          description: callbacks.current.channelName ?? `通道 ${track}`,
+        })
         return
       }
       if (!callbacks.current.onPlaybackEnded) return
@@ -295,7 +328,7 @@ export function StreamPlayer({
           aria-label={stopLabel}
           title={stopLabel}
           onClick={() => {
-            close()
+            close(true)
             props.onStop?.()
           }}
         >
@@ -304,12 +337,6 @@ export function StreamPlayer({
         </Button>
       )}
     </div>
-  )
-  const errorAlert = error && (
-    <Alert variant="destructive">
-      <AlertTitle>预览未完成</AlertTitle>
-      <AlertDescription>{error}</AlertDescription>
-    </Alert>
   )
   return (
     <section
@@ -326,16 +353,6 @@ export function StreamPlayer({
               : "idle"
       }
     >
-      {live && error ? (
-        <ScrollArea
-          className="live-error-scroll"
-          viewportProps={{ className: "live-error-viewport" }}
-        >
-          {errorAlert}
-        </ScrollArea>
-      ) : (
-        errorAlert
-      )}
       {session ? (
         <HlsVideo
           key={session.id}
@@ -370,7 +387,9 @@ export function StreamPlayer({
                 ? live
                   ? "正在连接通道"
                   : "正在准备录像"
-                : "画面未开启"}
+                : error
+                  ? "预览未完成"
+                  : "画面未开启"}
             </EmptyTitle>
             {expired && (
               <EmptyDescription>本次连接已到期，请重试。</EmptyDescription>

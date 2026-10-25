@@ -118,3 +118,28 @@
 运行环境沿用 `http://localhost:3102` 的 Next.js 开发服务器与热更新。普通沙箱不能启动 Chrome（SIGABRT / kill EPERM），通过自动审批后在允许启动 Chrome 的环境执行浏览器验收；未涉及真实设备数据或媒体。依赖安装沿用已有 pnpm store，未迁移现有依赖目录。
 
 本次没有进行真实 NVR 或 Safari 应用实机验收，不提升标准历史 RTSP、绝对媒体时间映射或长期音画稳定性的验收状态。后续新增前端 API 按上述 hook 与请求层约定扩展。
+
+## 全站操作反馈统一使用 Sonner
+
+范围：按用户澄清的“操作反馈”复核 P0 查询交互与 P2 播放/保存操作。保留字段校验、加载/读取进度、选中状态、任务历史、能力说明，以及失败后的空状态和重试入口。
+
+实现：
+
+- 通道、录像和按需读取设备详情的请求失败统一通过 `useQueryErrorToast` 反馈，替代页内详细错误 Alert。每个视图复用一个通知 ID；同文案的新请求失败仍可再次通知，普通重渲染、关闭通知和侧栏收展不重放旧错误。查询成功和组件离开时移除旧通知；清理同时重置去重引用，兼容 StrictMode 的 effect 重放。
+- 预览准备失败、超时、HLS 致命错误、播放/声音/文件内定位/恢复倍速/全屏操作失败使用 Sonner；输入格式和允许范围错误仍在字段旁显示。按播放器与操作使用稳定 ID，通道信息进入通知描述；同一次致命错误只处理一次。
+- 连续播放未读完、跨片段搜索缺口使用 warning，播放到最后一段使用 info。手动关闭时若 DELETE 未能确认释放，告知画面已关闭、连接会按 TTL 回收；卸载、自动切换和其他后台清理不追加通知。
+- 录制和下载的成功、部分保存、错误、超限及“查看任务”操作已使用 Sonner，本次沿用。全局仍仅一个 Toaster，沿用同一宿主随全屏迁移的机制。
+
+已验证（自动测试；浏览器仅模拟 API 与合成媒体）：
+
+| 命令 / 检查 | 结果 |
+| --- | --- |
+| `pnpm test` | 16 个文件、212 项通过，1.30 秒；包含工作区已有的保存改动 |
+| `pnpm typecheck`；`pnpm lint`；本次 TS/TSX 文件 `prettier --check`；`git diff --check` | 全部通过；最后仅调整查询测试断言后，再次执行类型检查、该文件 ESLint、格式及差异检查，通过 |
+| `TEST_BASE_URL=http://localhost:3000 NVR_INTEGRATION=0 RUN_NVR_SAVE_TESTS=0 RUN_NVR_LONG_SAVE_TESTS=0 pnpm exec playwright test --workers=1 --output=/private/tmp/hikvision-feedback-final-results` | 完整运行 2.0 分钟：58 通过、8 实机用例未启用，1 处新增测试断言失败；所有播放器、保存、全屏、滚动与 16 路合成媒体用例通过 |
+| 同上环境，`pnpm exec playwright test tests/browser/query.spec.ts --workers=1 --output=/private/tmp/hikvision-feedback-query-final-results` | 修正缓存假设后 7/7 通过，11.6 秒；最终 59 个非设备用例已分批通过，未将其写成单次全量成功 |
+| `pnpm build` | Next.js 16.4.1 生产构建通过；编译 1360 ms、TypeScript 2.5 秒、静态页面 5/5 |
+
+完整运行的唯一失败来自新增测试的假设：预期手动刷新失败后切页不重新读取通道，实际请求增加。核对当前 `@tanstack/query-core@5.104.5` 的 error reducer，失败会使查询失效，重挂载可以重新读取；现断言该行为并继续检查新页面只有一个包含详细错误的 Sonner。应用请求逻辑未因测试修改。查询专项另覆盖认证失败、网络失败、无效 JSON 的不自动重试与显式恢复、取消/迟到响应、关闭设备详情和刷新清理。
+
+环境：尝试启动 `3102` 后，Next.js 检测到同仓库已有 `3000` 开发实例并退出；改为复用健康的 `http://localhost:3000` 与热更新，没有停止已有服务。Chrome 启动受普通沙箱限制，自动审批后在允许启动 Chrome 的环境执行回归。没有读取真实 NVR 或生成真实画面产物；本轮不提升 Safari、历史 RTSP 或媒体绝对时间映射的验收结论。下一步仅按用户新任务继续；当前操作反馈迁移已完成。

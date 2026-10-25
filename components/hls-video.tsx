@@ -18,12 +18,12 @@ import {
   VolumeXIcon,
   LocateIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Field,
   FieldGroup,
@@ -81,9 +81,7 @@ export function HlsVideo({
   const audio = useRef<LocalLiveAudio | null>(null)
   const ptsOffset = useRef<number | undefined>(undefined)
   const [sound, setSound] = useState(false)
-  const [audioError, setAudioError] = useState("")
   const [paused, setPaused] = useState(true)
-  const [playError, setPlayError] = useState("")
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
   const [pendingSeek, setPendingSeek] = useState<number | null>(null)
@@ -97,6 +95,17 @@ export function HlsVideo({
   const [rate, setRate] = useState(initialPreferences?.rate ?? 1)
   const preferences = useRef(initialPreferences)
   const soundId = useId()
+  const reportError = useCallback(
+    (message: string, operation: string) => {
+      toast.error(message, {
+        id: `media-${session.id}-${operation}`,
+        description: live
+          ? `${liveTrack ? `通道 ${liveTrack}` : "实时预览"} · 播放操作`
+          : `${clipSource?.channelName ?? "录像"} · 录像回放`,
+      })
+    },
+    [session.id, live, liveTrack, clipSource?.channelName]
+  )
   const recorded = "durationSeconds" in session ? session : undefined
   const totalDuration = playbackStatus?.complete
     ? (playbackStatus.totalDurationSeconds ?? playbackStatus.durationSeconds)
@@ -123,8 +132,9 @@ export function HlsVideo({
     if (totalDuration !== undefined && target > totalDuration) {
       seekTarget.current = null
       setPendingSeek(null)
-      setPlayError(
-        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`
+      reportError(
+        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`,
+        "seek"
       )
       return
     }
@@ -149,12 +159,11 @@ export function HlsVideo({
     } catch {
       seekTarget.current = null
       setPendingSeek(null)
-      setPlayError("暂时无法跳转，请稍后重试。")
+      reportError("暂时无法跳转，请稍后重试。", "seek")
     }
-  }, [totalDuration])
+  }, [totalDuration, reportError])
   function requestSeek(seconds: number) {
     if (!Number.isFinite(seconds) || seconds < 0) return
-    setPlayError("")
     seekTarget.current = seconds
     setPendingSeek(seconds)
     applyPendingSeek()
@@ -167,9 +176,11 @@ export function HlsVideo({
     const element = video.current
     if (!element) return
     let disposed = false
+    let failed = false
     let hls: import("hls.js").default | undefined
     const fail = () => {
-      if (disposed) return
+      if (disposed || failed) return
+      failed = true
       audio.current?.close()
       audio.current = null
       setSound(false)
@@ -185,7 +196,7 @@ export function HlsVideo({
         try {
           element.playbackRate = preferences.current.rate
         } catch {
-          setPlayError("浏览器未能恢复倍速，请重新选择。")
+          reportError("浏览器未能恢复倍速，请重新选择。", "rate")
         }
       }
     }
@@ -237,11 +248,10 @@ export function HlsVideo({
       element.removeAttribute("src")
       element.load()
     }
-  }, [session, live, onError])
+  }, [session, live, onError, reportError])
   const enableSound = useCallback(async () => {
     if (audio.current) return
     if (!video.current) return
-    setAudioError("")
     let player: LocalLiveAudio | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
@@ -253,7 +263,7 @@ export function HlsVideo({
           audio.current = null
           setSound(false)
           onPreferencesChange?.({ sound: false })
-          setAudioError(message)
+          reportError(message, "audio")
         },
         !live
       )
@@ -274,11 +284,11 @@ export function HlsVideo({
       audio.current = null
       setSound(false)
       onPreferencesChange?.({ sound: false })
-      setAudioError("浏览器尚未允许声音，请再次点击开启声音。")
+      reportError("浏览器尚未允许声音，请再次点击开启声音。", "audio")
     } finally {
       clearTimeout(timeout)
     }
-  }, [loadAudio, live, onPreferencesChange])
+  }, [loadAudio, live, onPreferencesChange, reportError])
   useEffect(() => {
     if (!live && preferences.current?.sound) void enableSound()
   }, [enableSound, live])
@@ -293,20 +303,6 @@ export function HlsVideo({
       void enableSound()
     }
   }
-  const errorMessages = (
-    <>
-      {playError && (
-        <p className="text-sm text-destructive" role="alert">
-          {playError}
-        </p>
-      )}
-      {audioError && (
-        <p className="text-sm text-destructive" role="alert">
-          {audioError}
-        </p>
-      )}
-    </>
-  )
   return (
     <div className="video-surface" ref={frame}>
       <SaveFullscreenActivity />
@@ -321,7 +317,6 @@ export function HlsVideo({
         aria-label={live ? "实时预览画面" : "历史录像预览"}
         onPlay={() => {
           setPaused(false)
-          setPlayError("")
         }}
         onPause={() => setPaused(true)}
         onEnded={(event) => {
@@ -500,9 +495,8 @@ export function HlsVideo({
                 const element = video.current
                 if (!element) return
                 if (element.paused) {
-                  setPlayError("")
                   void element.play().catch(() => {
-                    setPlayError("播放未能开始，请再次点击播放。")
+                    reportError("播放未能开始，请再次点击播放。", "play")
                   })
                 } else element.pause()
               }}
@@ -568,10 +562,14 @@ export function HlsVideo({
             size="sm"
             aria-label="全屏"
             title="全屏"
-            onClick={() => {
-              void frame.current
-                ?.requestFullscreen()
-                .catch(() => setAudioError("浏览器未能进入全屏，请重试。"))
+            onClick={async () => {
+              try {
+                if (!frame.current?.requestFullscreen)
+                  throw new Error("Fullscreen unavailable")
+                await frame.current.requestFullscreen()
+              } catch {
+                reportError("浏览器未能进入全屏，请重试。", "fullscreen")
+              }
             }}
           >
             <MaximizeIcon data-icon="inline-start" />
@@ -580,16 +578,6 @@ export function HlsVideo({
         </div>
         {actions}
       </div>
-      {live && (playError || audioError) ? (
-        <ScrollArea
-          className="live-error-scroll"
-          viewportProps={{ className: "live-error-viewport" }}
-        >
-          {errorMessages}
-        </ScrollArea>
-      ) : (
-        errorMessages
-      )}
     </div>
   )
 }

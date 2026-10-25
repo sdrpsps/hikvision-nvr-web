@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useRef, useState } from "react"
+import { useQueryErrorToast } from "@/hooks/use-query-error-toast"
 import {
   MonitorIcon,
   PanelLeftCloseIcon,
@@ -21,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -52,6 +52,7 @@ export function LiveConsole() {
   const channelsQuery = useChannels()
   const channels = channelsQuery.data?.channels
   const error = channelsQuery.error?.message
+  useQueryErrorToast(channelsQuery, "通道读取失败")
   const [generation, setGeneration] = useState(0)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activity, setActivity] = useState<Record<number, boolean>>({})
@@ -137,18 +138,17 @@ export function LiveConsole() {
           </div>
         </div>
         {!sidebarOpen && error && (
-          <Alert variant="destructive">
-            <AlertTitle>通道读取失败</AlertTitle>
-            <AlertDescription>
-              {error}
-              <Button
-                variant="link"
-                onClick={() => void channelsQuery.refetch()}
-              >
-                重新读取
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>暂时无法显示通道</EmptyTitle>
+            </EmptyHeader>
+            <Button
+              variant="outline"
+              onClick={() => void channelsQuery.refetch()}
+            >
+              重新读取
+            </Button>
+          </Empty>
         )}
         <div
           className={cn(
@@ -191,10 +191,12 @@ export function LiveConsole() {
                 </div>
               )}
               {error && (
-                <Alert variant="destructive">
-                  <AlertTitle>通道读取失败</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>暂时无法显示通道</EmptyTitle>
+                    <EmptyDescription>请刷新通道后重试。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
               {channels?.length === 0 && (
                 <Empty>

@@ -1,10 +1,10 @@
 "use client"
 
 import { useCallback, useState } from "react"
+import { toast } from "sonner"
 import {
   ArchiveIcon,
   ChevronDownIcon,
-  CircleAlertIcon,
   InfoIcon,
   MonitorIcon,
   RefreshCwIcon,
@@ -28,7 +28,6 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
   EmptyDescription,
@@ -40,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { dateSchema, type Recordings } from "@/shared/contracts"
 import { useChannels, useDevice, useRecordings } from "@/hooks/use-api"
+import { useQueryErrorToast } from "@/hooks/use-query-error-toast"
 import { cn } from "@/lib/utils"
 import { PreviewPlayer } from "@/components/preview-player"
 import { ConsoleNav } from "@/components/console-nav"
@@ -75,7 +75,6 @@ type RecordingSelection = {
   selected: string
   continuous: boolean
   automatic: string
-  sequenceNotice: string
   listOpen: boolean
 }
 
@@ -85,7 +84,6 @@ function emptySelection(key: string): RecordingSelection {
     selected: "",
     continuous: false,
     automatic: "",
-    sequenceNotice: "",
     listOpen: false,
   }
 }
@@ -119,8 +117,7 @@ export function RecordingConsole() {
   const key = `${track}|${date}|${refresh}|${recordingsQuery.dataUpdatedAt}`
   const activeSelection =
     selection.key === key ? selection : emptySelection(key)
-  const { selected, continuous, automatic, sequenceNotice, listOpen } =
-    activeSelection
+  const { selected, continuous, automatic, listOpen } = activeSelection
   function updateSelection(patch: Partial<Omit<RecordingSelection, "key">>) {
     setSelection((old) => ({
       ...(old.key === key ? old : emptySelection(key)),
@@ -128,6 +125,10 @@ export function RecordingConsole() {
     }))
   }
   const error = recordingsQuery.error?.message
+  useQueryErrorToast(
+    resourceError ? channelsQuery : recordingsQuery,
+    "录像查询失败"
+  )
   const data =
     !error && !recordingsQuery.isFetching ? recordingsQuery.data : undefined
   const validDate = dateSchema.safeParse(date).success
@@ -142,10 +143,10 @@ export function RecordingConsole() {
 
   const segment = data?.segments.find((segment) => segment.id === selected)
   function selectSegment(id: string) {
-    updateSelection({ selected: id, automatic: "", sequenceNotice: "" })
+    updateSelection({ selected: id, automatic: "" })
   }
   function stopSequence() {
-    updateSelection({ automatic: "", continuous: false, sequenceNotice: "" })
+    updateSelection({ automatic: "", continuous: false })
   }
   function nextSegment() {
     if (!continuous || !data || !segment) return
@@ -157,16 +158,16 @@ export function RecordingConsole() {
       updateSelection({
         automatic: "",
         continuous: false,
-        sequenceNotice: "已播放到当日最后一个片段。",
       })
+      toast.info("已播放到当日最后一个片段。")
       return
     }
     const gap = Date.parse(next.startAt) - Date.parse(segment.endAt)
+    if (gap > 1000)
+      toast.warning(
+        `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
+      )
     updateSelection({
-      sequenceNotice:
-        gap > 1000
-          ? `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
-          : "",
       automatic: next.id,
       selected: next.id,
     })
@@ -277,11 +278,12 @@ export function RecordingConsole() {
           aria-busy={loading}
         >
           {resourceError || error ? (
-            <Alert variant="destructive">
-              <CircleAlertIcon />
-              <AlertTitle>录像查询失败</AlertTitle>
-              <AlertDescription>{resourceError || error}</AlertDescription>
-            </Alert>
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>暂时无法显示录像</EmptyTitle>
+                <EmptyDescription>请刷新后重试。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : null}
           {!resources && !resourceError ? (
             <div
@@ -353,7 +355,6 @@ export function RecordingConsole() {
                                   updateSelection({
                                     continuous: checked,
                                     automatic: checked ? automatic : "",
-                                    sequenceNotice: "",
                                   })
                                 }}
                               />
@@ -377,11 +378,6 @@ export function RecordingConsole() {
                         </EmptyDescription>
                       </EmptyHeader>
                     </Empty>
-                  )}
-                  {sequenceNotice && (
-                    <p role="status" className="text-sm text-muted-foreground">
-                      {sequenceNotice}
-                    </p>
                   )}
                 </div>
               ) : (
@@ -534,6 +530,7 @@ function DeviceDetailsContent({
   const deviceQuery = useDevice({ enabled: true })
   const device = deviceQuery.data
   const error = deviceQuery.error?.message
+  useQueryErrorToast(deviceQuery, "设备信息读取失败")
   return (
     <>
       {device ? (
@@ -564,10 +561,7 @@ function DeviceDetailsContent({
         </>
       ) : error && !deviceQuery.isFetching ? (
         <>
-          <Alert variant="destructive">
-            <AlertTitle>设备信息读取失败</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <p className="text-sm text-muted-foreground">暂时无法显示设备信息</p>
           <Button
             variant="outline"
             size="sm"

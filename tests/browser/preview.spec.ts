@@ -686,7 +686,9 @@ test("unknown total does not grow a false scale and a waiting target can be repl
   ).toBe(true)
   state.complete = true
   await expect(
-    page.getByText("目标超出录像范围，文件总时长为 00:03。", { exact: true })
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "目标超出录像范围，文件总时长为 00:03。" })
   ).toBeVisible()
   await expect(slider).toHaveAttribute("max", "3")
   await expect(page.getByRole("button", { name: "取消定位" })).toHaveCount(0)
@@ -711,7 +713,9 @@ test("continuous playback confirms completion, releases before next file and pre
   state.complete = false
   await endSequenceVideo(page)
   await expect(
-    page.getByText("录像尚未读取完成，请稍后继续播放。")
+    page
+      .locator('[data-sonner-toast][data-type="warning"]')
+      .filter({ hasText: "录像尚未读取完成，请稍后继续播放。" })
   ).toBeVisible()
   expect(posts).toHaveLength(1)
   state.complete = true
@@ -743,10 +747,16 @@ test("continuous playback confirms completion, releases before next file and pre
   await expect.poll(() => posts.length).toBe(3)
   await pauseSequenceVideo(page)
   await expect(
-    page.getByText(/搜索结果中间有 1 小时 0 分未覆盖区间/)
+    page
+      .locator('[data-sonner-toast][data-type="warning"]')
+      .filter({ hasText: "搜索结果中间有 1 小时 0 分未覆盖区间" })
   ).toBeVisible()
   await endSequenceVideo(page)
-  await expect(page.getByText("已播放到当日最后一个片段。")).toBeVisible()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="info"]')
+      .filter({ hasText: "已播放到当日最后一个片段。" })
+  ).toBeVisible()
   await expect(page.getByRole("switch", { name: "连续播放" })).not.toBeChecked()
   await expect(page.locator("video")).toHaveCount(0)
   expect(posts.map((body) => body.segmentId)).toEqual(
@@ -827,7 +837,11 @@ test("continuous playback is opt-in and a failed next file does not loop retries
   await page.getByRole("switch", { name: "连续播放" }).click()
   state.failNext = true
   await endSequenceVideo(page)
-  await expect(page.getByText("下一片段读取失败。")).toBeVisible()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "下一片段读取失败。" })
+  ).toBeVisible()
   await expect(page.getByRole("switch", { name: "连续播放" })).not.toBeChecked()
   expect(posts).toHaveLength(2)
   await expect(
@@ -835,7 +849,7 @@ test("continuous playback is opt-in and a failed next file does not loop retries
   ).toBeEnabled()
 })
 
-test("a synchronous audio permission failure remains isolated from video", async ({
+test("player operation failures use Sonner and remain isolated from video", async ({
   page,
 }) => {
   const errors: string[] = []
@@ -854,11 +868,51 @@ test("a synchronous audio permission failure remains isolated from video", async
   await pauseSequenceVideo(page)
   await page.getByRole("switch", { name: "声音", exact: true }).click()
   await expect(
-    page.getByText("浏览器尚未允许声音，请再次点击开启声音。")
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "浏览器尚未允许声音，请再次点击开启声音。" })
   ).toBeVisible()
   await expect(
     page.getByRole("switch", { name: "声音", exact: true })
   ).not.toBeChecked()
+  await page.locator("video").evaluate((video: HTMLVideoElement) => {
+    video.play = () =>
+      Promise.reject(new DOMException("Playback denied", "NotAllowedError"))
+    const surface = video.closest<HTMLElement>(".video-surface")!
+    surface.requestFullscreen = () =>
+      Promise.reject(new DOMException("Fullscreen denied", "NotAllowedError"))
+  })
+  await page.getByRole("button", { name: "播放录像", exact: true }).click()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "播放未能开始，请再次点击播放。" })
+  ).toBeVisible()
+  await page.getByRole("button", { name: "全屏", exact: true }).click()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "浏览器未能进入全屏，请重试。" })
+  ).toBeVisible()
+  await page.locator("video").evaluate((video: HTMLVideoElement) => {
+    Reflect.deleteProperty(video, "play")
+    Object.defineProperty(video, "playbackRate", {
+      configurable: true,
+      get: () => 1,
+      set: () => {
+        throw new DOMException("Rate denied", "NotSupportedError")
+      },
+    })
+  })
+  await page.getByRole("button", { name: "播放倍速", exact: true }).click()
+  await page.getByRole("button", { name: "2×", exact: true }).click()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "浏览器不支持此倍速。" })
+  ).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.locator(".stream-player [role=alert]")).toHaveCount(0)
   await page.getByRole("button", { name: "播放录像", exact: true }).click()
   await expect
     .poll(() =>
@@ -869,7 +923,18 @@ test("a synchronous audio permission failure remains isolated from video", async
     .toBeGreaterThan(0)
   expect(posts).toHaveLength(1)
   expect(errors).toEqual([])
+  await page.route(/\/api\/streams\/[^/]+$/, async (route) => {
+    if (route.request().method() === "DELETE")
+      await route.fulfill({ status: 503 })
+    else await route.fallback()
+  })
   await page.getByRole("button", { name: "关闭回放" }).click()
+  await expect(page.locator("video")).toHaveCount(0)
+  await expect(
+    page.locator('[data-sonner-toast][data-type="warning"]').filter({
+      hasText: "画面已关闭，后台连接未能确认释放，将自动超时回收。",
+    })
+  ).toBeVisible()
 })
 
 test("a stalled playback preparation times out and stops the sequence", async ({
@@ -894,7 +959,11 @@ test("a stalled playback preparation times out and stops the sequence", async ({
   })
   await page.getByRole("switch", { name: "连续播放" }).click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
-  await expect(page.getByText("准备预览超时，请重试。")).toBeVisible()
+  await expect(
+    page
+      .locator('[data-sonner-toast][data-type="error"]')
+      .filter({ hasText: "准备预览超时，请重试。" })
+  ).toBeVisible()
   await expect(page.getByRole("switch", { name: "连续播放" })).not.toBeChecked()
   await expect(
     page.getByRole("button", { name: "重试", exact: true })

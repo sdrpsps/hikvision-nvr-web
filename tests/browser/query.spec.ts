@@ -71,6 +71,7 @@ test("channel queries share a cache across routes and manual refresh fetches aga
   page,
 }) => {
   let channelRequests = 0
+  let channelsReachable = true
   const streamRequests: string[] = []
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.startsWith("/api/streams/"))
@@ -78,6 +79,13 @@ test("channel queries share a cache across routes and manual refresh fetches aga
   })
   await page.route("**/api/channels", (route) => {
     channelRequests++
+    if (!channelsReachable)
+      return route.fulfill({
+        status: 502,
+        json: {
+          error: { code: "NVR_UNREACHABLE", message: "刷新通道失败。" },
+        },
+      })
     return route.fulfill({ json: channels })
   })
   await page.route("**/api/recordings?**", (route) =>
@@ -102,6 +110,20 @@ test("channel queries share a cache across routes and manual refresh fetches aga
   await page.getByRole("button", { name: "刷新通道", exact: true }).click()
   await expect.poll(() => channelRequests).toBe(initialRequests + 1)
   expect(streamRequests).toEqual([])
+  channelsReachable = false
+  await page.getByRole("button", { name: "刷新通道", exact: true }).click()
+  const errorToast = page.locator('[data-sonner-toast][data-type="error"]')
+  await expect(errorToast).toContainText("通道读取失败")
+  const failedRequests = channelRequests
+  await errorToast.getByRole("button", { name: "关闭提示" }).click()
+  await expect(errorToast).toHaveCount(0)
+  // An error invalidates the cache in this Query version. Remounting reads
+  // again; the new page must report the failure with one notification.
+  await page.getByRole("link", { name: "录像回放", exact: true }).click()
+  await expect(errorToast).toHaveCount(1)
+  await expect(errorToast).toContainText("录像查询失败")
+  await expect(errorToast).toContainText("刷新通道失败。")
+  expect(channelRequests).toBeGreaterThan(failedRequests)
 })
 
 test("switching dates aborts the previous query and ignores its late result", async ({
@@ -219,10 +241,12 @@ for (const failure of ["unauthorized", "network", "invalid-json"] as const) {
       })
     })
     await page.goto("/playback")
-    await expect(page.getByText("录像查询失败", { exact: true })).toBeVisible()
+    const errorToast = page.locator('[data-sonner-toast][data-type="error"]')
+    await expect(errorToast).toHaveCount(1)
+    await expect(errorToast).toContainText("录像查询失败")
     if (failure === "unauthorized")
       await expect(
-        page.getByText("查询认证失败。", { exact: true })
+        errorToast.getByText("查询认证失败。", { exact: true })
       ).toBeVisible()
     await page.waitForTimeout(1500)
     expect(requests).toBe(1)
@@ -230,6 +254,7 @@ for (const failure of ["unauthorized", "network", "invalid-json"] as const) {
     await page.getByRole("button", { name: "刷新", exact: true }).click()
     await expect(page.getByText("这一天没有检索到录像")).toBeVisible()
     expect(requests).toBe(2)
+    await expect(errorToast).toHaveCount(0)
     await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
   })
 }
