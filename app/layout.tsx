@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils"
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "NVR 控制台",
-  description: "多窗口实时预览与历史录像查询。",
+  title: "海康威视 NVR 网页客户端 · Hikvision NVR Web",
+  description:
+    "海康威视 NVR 网页客户端，支持实时预览、录像回放、通道改名、浏览器录制与片段下载。",
 }
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" })
