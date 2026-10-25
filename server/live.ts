@@ -24,17 +24,28 @@ type Session = {
   audio: (ReturnType<typeof copiedAudio> & { sequence: number })[]
   cancel: () => void
 }
-export function liveArguments(config: NvrConfig, track: string) {
+export function liveArguments(
+  config: NvrConfig,
+  track: string,
+  options: {
+    videoFragmentDurationUs?: number
+    reportAudioStatus?: boolean
+  } = {}
+) {
   const uri = new URL(
     `rtsp://${config.NVR_HOST}:${config.NVR_RTSP_PORT}/Streaming/Channels/${track}`
   )
   uri.username = config.NVR_USERNAME
   uri.password = config.NVR_PASSWORD
+  const fragmentDuration = options.videoFragmentDurationUs
+    ? `:frag_duration=${options.videoFragmentDurationUs}`
+    : ""
   return [
     "-nostdin",
     "-hide_banner",
     "-loglevel",
-    "error",
+    options.reportAudioStatus ? "info" : "error",
+    ...(options.reportAudioStatus ? ["-nostats"] : []),
     "-rtsp_transport",
     "tcp",
     "-timeout",
@@ -59,7 +70,7 @@ export function liveArguments(config: NvrConfig, track: string) {
     "make_zero",
     "-f",
     "tee",
-    "[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:select=v]pipe:1|[f=mov:movflags=+frag_keyframe+empty_moov+default_base_moof:frag_duration=500000:select=a:onfail=ignore]pipe:3",
+    `[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof${fragmentDuration}:select=v]pipe:1|[f=mov:movflags=+frag_keyframe+empty_moov+default_base_moof:frag_duration=500000:select=a:onfail=ignore]pipe:3`,
   ]
 }
 type Launcher = (args: string[]) => ChildProcess

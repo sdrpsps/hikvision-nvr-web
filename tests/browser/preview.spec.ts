@@ -340,18 +340,30 @@ for (const codec of ["h264", "hevc"] as const) {
     const boxes = await controls.locator("button").evaluateAll((buttons) =>
       buttons.map((button) => {
         const { x, y, width, height } = button.getBoundingClientRect()
-        return { x, y, width, height }
+        return {
+          x,
+          y,
+          width,
+          height,
+          label: button.getAttribute("aria-label"),
+        }
       })
     )
-    expect(boxes).toHaveLength(5)
+    expect(boxes).toHaveLength(6)
+    await expect(
+      page.getByRole("button", { name: "下载片段", exact: true })
+    ).toBeVisible()
     expect(
       Math.max(...boxes.map((b) => b.y)) - Math.min(...boxes.map((b) => b.y))
     ).toBeLessThan(1)
     expect(
       boxes
-        .filter((_, index) => index !== 1)
+        .filter((box) => !["播放倍速", "下载片段"].includes(box.label ?? ""))
         .every((b) => Math.abs(b.width - b.height) < 1)
     ).toBe(true)
+    expect(
+      boxes.find((box) => box.label === "下载片段")!.width
+    ).toBeLessThanOrEqual(36)
     await page
       .locator(".playback-player")
       .screenshot({ path: `/tmp/hikvision-playback-${codec}-mobile.png` })
@@ -407,7 +419,7 @@ test("preview failures remain retryable and pending preparation can cancel", asy
   await page.getByRole("button", { name: "播放" }).click()
   await expect(page.getByText("读取录像中断，请重试。")).toBeVisible()
   await page.getByRole("button", { name: "重试", exact: true }).click()
-  await expect(page.getByText("正在准备预览，请稍候…")).toBeVisible()
+  await expect(page.getByText("正在准备录像", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "取消准备" }).click()
   await expect(page.getByRole("button", { name: "播放" })).toBeEnabled()
   await expect(page.locator("video")).toHaveCount(0)

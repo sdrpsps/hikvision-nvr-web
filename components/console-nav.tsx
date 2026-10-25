@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { MonitorIcon, ArchiveIcon } from "lucide-react"
+import { SaveTasksButton } from "@/components/browser-save-provider"
 
 export function ConsoleNav({ active }: { active: "live" | "playback" }) {
   return (
@@ -15,6 +16,7 @@ export function ConsoleNav({ active }: { active: "live" | "playback" }) {
         <ArchiveIcon aria-hidden="true" />
         录像回放
       </Link>
+      <SaveTasksButton />
     </nav>
   )
 }

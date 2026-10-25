@@ -70,6 +70,14 @@ export const playbackStatusSchema = z.object({
 export type PlaybackStatus = z.infer<typeof playbackStatusSchema>
 
 export const liveRequestSchema = z.strictObject({ track: trackIdSchema })
+// Transfer requests identify only trusted server-side sources. A selection's
+// relative timestamps are interpreted locally by the browser media exporter.
+export const historyTransferRequestSchema = previewRequestSchema
+export const liveTransferRequestSchema = liveRequestSchema
+export const transferEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
+  z.object({ type: z.literal("end"), reason: z.literal("timeout") }),
+])
 export const liveSchema = previewSchema.omit({
   durationSeconds: true,
   estimatedDurationSeconds: true,

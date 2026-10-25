@@ -43,6 +43,7 @@ import { useChannels, useDevice, useRecordings } from "@/hooks/use-api"
 import { cn } from "@/lib/utils"
 import { PreviewPlayer } from "@/components/preview-player"
 import { ConsoleNav } from "@/components/console-nav"
+import { SaveActivityBar } from "@/components/browser-save-provider"
 import type { PlaybackPreferences } from "@/components/hls-video"
 
 function clock(iso: string, timeZone: string) {
@@ -165,7 +166,7 @@ export function RecordingConsole() {
       sequenceNotice:
         gap > 1000
           ? `已切换到下一片段；搜索结果中间有 ${duration(gap)}未覆盖区间。`
-          : "已切换到下一片段。",
+          : "",
       automatic: next.id,
       selected: next.id,
     })
@@ -202,6 +203,7 @@ export function RecordingConsole() {
         </div>
         <ConsoleNav active="playback" />
       </header>
+      <SaveActivityBar />
       <main className="console-main playback-main">
         <h1 className="sr-only">录像回放</h1>
         <section className="playback-query-bar" aria-label="检索录像">
@@ -329,6 +331,12 @@ export function RecordingConsole() {
                         track={track}
                         date={date}
                         segmentId={segment.id}
+                        timeZone={data.timeZone}
+                        channelName={
+                          resources?.channels.find(
+                            (channel) => channel.id === track
+                          )?.name
+                        }
                         autoStart={automatic === segment.id}
                         initialPreferences={preferences}
                         onPreferencesChange={updatePreferences}
@@ -391,7 +399,6 @@ export function RecordingConsole() {
                 <div className="timeline-toolbar">
                   <div className="distribution-heading">
                     <h2>当日录像</h2>
-                    <span>选择片段后播放</span>
                   </div>
                   <ToggleGroup
                     aria-label="时间轴缩放"

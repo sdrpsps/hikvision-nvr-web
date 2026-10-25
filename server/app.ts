@@ -5,6 +5,8 @@ import {
   liveSchema,
   previewRequestSchema,
   previewSchema,
+  historyTransferRequestSchema,
+  liveTransferRequestSchema,
 } from "../shared/contracts"
 import { LiveSessions } from "./live"
 import { PlaybackSessions } from "./playback"
@@ -18,6 +20,7 @@ import { readNvrConfig } from "./config"
 import { AppError } from "./errors"
 import { NvrService } from "./recordings"
 import { todayIn } from "./time"
+import { MediaTransfers } from "./transfer"
 
 export function createApp(
   getService: () => NvrService = defaultService,
@@ -25,7 +28,8 @@ export function createApp(
     PlaybackSessions,
     "create" | "playlist" | "status" | "asset" | "delete" | "audio"
   > = new PlaybackSessions(),
-  live = new LiveSessions()
+  live = new LiveSessions(),
+  transfers: Pick<MediaTransfers, "history" | "live"> = new MediaTransfers()
 ) {
   const app = new Hono().basePath("/api")
   app.use("*", async (c, next) => {
@@ -78,6 +82,76 @@ export function createApp(
     )
       throw new AppError("MEDIA_ORIGIN_DENIED", 403, "请从本应用页面打开预览。")
     await next()
+  })
+  app.use("/transfers/*", async (c, next) => {
+    const origin = c.req.header("origin")
+    const requestOrigin = new URL(c.req.url)
+    requestOrigin.host = c.req.header("host") ?? requestOrigin.host
+    if (
+      c.req.header("sec-fetch-site") === "cross-site" ||
+      (origin && origin !== requestOrigin.origin)
+    )
+      throw new AppError(
+        "MEDIA_ORIGIN_DENIED",
+        403,
+        "请从本应用页面开始录制或下载。"
+      )
+    await next()
+  })
+  app.use(
+    "/transfers/*",
+    bodyLimit({
+      maxSize: 1024,
+      onError: (c) =>
+        c.json(
+          { error: { code: "INVALID_BODY", message: "请求内容过大。" } },
+          400
+        ),
+    })
+  )
+  app.post("/transfers/history", async (c) => {
+    if (!c.req.header("content-type")?.startsWith("application/json"))
+      throw new AppError("INVALID_BODY", 400, "请使用 JSON 请求。")
+    const parsed = historyTransferRequestSchema.safeParse(
+      await c.req.json().catch(() => undefined)
+    )
+    if (!parsed.success)
+      throw new AppError(
+        "INVALID_BODY",
+        400,
+        "请提供合法轨道、日期和录像 ID，不接受其他参数。"
+      )
+    const service = getService()
+    const { track, date, segmentId } = parsed.data
+    return transfers.history(
+      service.config,
+      () => service.resolveSegment(track, date, segmentId),
+      c.req.raw.signal
+    )
+  })
+  app.post("/transfers/live", async (c) => {
+    if (!c.req.header("content-type")?.startsWith("application/json"))
+      throw new AppError("INVALID_BODY", 400, "请使用 JSON 请求。")
+    const parsed = liveTransferRequestSchema.safeParse(
+      await c.req.json().catch(() => undefined)
+    )
+    if (!parsed.success)
+      throw new AppError(
+        "INVALID_BODY",
+        400,
+        "请选择合法通道，不接受其他参数。"
+      )
+    const service = getService()
+    return transfers.live(
+      service.config,
+      async () => {
+        const channels = await service.channels()
+        if (!channels.some((channel) => channel.id === parsed.data.track))
+          throw new AppError("CHANNEL_NOT_FOUND", 404, "设备未返回此通道。")
+        return parsed.data.track
+      },
+      c.req.raw.signal
+    )
   })
   app.post(
     "/streams/live",

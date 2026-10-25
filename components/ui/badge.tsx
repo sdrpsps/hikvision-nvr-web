@@ -8,6 +8,7 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
+        recording: "bg-destructive text-primary-foreground",
         default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
         secondary:
           "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",

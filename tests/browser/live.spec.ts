@@ -33,7 +33,9 @@ for (const mobile of [false, true])
     await expect(
       page.getByRole("link", { name: "实时预览", exact: true })
     ).toHaveAttribute("aria-current", "page")
-    await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
+    await expect(
+      page.getByRole("button", { name: "停止全部预览" })
+    ).toBeDisabled()
     await expect(page.locator(".video-wall-cell")).toHaveCount(4)
     await expect(
       page.getByRole("button", { name: "4 路", exact: true })
@@ -47,6 +49,55 @@ for (const mobile of [false, true])
         .click()
       await expect(page.locator(".video-wall-cell")).toHaveCount(count)
       await expect(page.locator("video")).toHaveCount(0)
+      const headings = await page
+        .locator(".live-window-heading")
+        .evaluateAll((elements) =>
+          elements.map((heading) => {
+            const record = heading.querySelector(".live-record-trigger")!
+            const label = record.querySelector("span")!
+            const channel = heading.querySelector(
+              '[data-slot="select-trigger"]'
+            )!
+            const headingBox = heading.getBoundingClientRect()
+            const recordBox = record.getBoundingClientRect()
+            const labelBox = label.getBoundingClientRect()
+            const channelBox = channel.getBoundingClientRect()
+            return {
+              compact: headingBox.width <= 192,
+              headingFits: heading.scrollWidth <= heading.clientWidth + 1,
+              recordHeight: recordBox.height,
+              recordFits:
+                recordBox.left >= headingBox.left - 1 &&
+                recordBox.right <= headingBox.right + 1,
+              label: label.textContent,
+              labelHidden: getComputedStyle(label).display === "none",
+              labelVisible:
+                getComputedStyle(label).visibility === "visible" &&
+                labelBox.width > 0 &&
+                labelBox.height > 0 &&
+                labelBox.left >= recordBox.left - 1 &&
+                labelBox.right <= recordBox.right + 1,
+              title: record.getAttribute("title"),
+              channelFits:
+                channelBox.width > 0 &&
+                channelBox.left >= headingBox.left - 1 &&
+                channelBox.right <= recordBox.left + 1,
+            }
+          })
+        )
+      expect(headings).toHaveLength(count)
+      for (const heading of headings)
+        expect(heading).toEqual({
+          compact: heading.compact,
+          headingFits: true,
+          recordHeight: 28,
+          recordFits: true,
+          label: "录制",
+          labelHidden: heading.compact,
+          labelVisible: !heading.compact,
+          title: "手动录制到本机",
+          channelFits: true,
+        })
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth
@@ -169,7 +220,9 @@ for (const codec of ["h264", "hevc"] as const)
       )
       .toBeGreaterThan(3)
     expect(bodies).toEqual([{ track: "101" }])
-    await expect(page.getByRole("button", { name: "全部停止" })).toBeEnabled()
+    await expect(
+      page.getByRole("button", { name: "停止全部预览" })
+    ).toBeEnabled()
     await page.getByRole("button", { name: "收起通道" }).click()
     await expect(window1.locator("video")).toHaveCount(1)
     expect(deleted).toEqual([])
@@ -187,7 +240,7 @@ for (const codec of ["h264", "hevc"] as const)
     await expect.poll(() => deleted.length).toBe(2)
     await window1.getByRole("button", { name: "开始预览" }).click()
     await expect(page.locator("video")).toHaveCount(1)
-    await page.getByRole("button", { name: "全部停止" }).click()
+    await page.getByRole("button", { name: "停止全部预览" }).click()
     await expect.poll(() => deleted.length).toBe(3)
     await expect(page.locator("video")).toHaveCount(0)
     await window1.getByRole("button", { name: "开始预览" }).click()
@@ -219,10 +272,12 @@ test("live start failure can retry and preparation can cancel", async ({
   const first = page.getByRole("region", { name: "窗口 1", exact: true })
   await first.getByRole("button", { name: "开始预览" }).click()
   await expect(page.getByText("实时连接超时。")).toBeVisible()
-  await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
+  await expect(
+    page.getByRole("button", { name: "停止全部预览" })
+  ).toBeDisabled()
   await first.getByRole("button", { name: "重试", exact: true }).click()
-  await expect(first.getByRole("status")).toHaveText("正在准备预览，请稍候…")
-  await expect(page.getByRole("button", { name: "全部停止" })).toBeEnabled()
+  await expect(first.getByRole("status")).toHaveText("正在连接通道")
+  await expect(page.getByRole("button", { name: "停止全部预览" })).toBeEnabled()
   for (const width of [1440, 1280, 375]) {
     await page.setViewportSize({ width, height: 1000 })
     for (const count of [4, 16]) {
@@ -230,20 +285,15 @@ test("live start failure can retry and preparation can cancel", async ({
         .getByRole("button", { name: `${count} 路`, exact: true })
         .click()
       const row = await first.locator(".preview-control-row").evaluate((el) => {
-        const status = el
-          .querySelector('[role="status"]')!
-          .getBoundingClientRect()
-        const button = el.querySelector("button")!.getBoundingClientRect()
         return {
-          sameLine:
-            Math.abs(
-              status.y + status.height / 2 - button.y - button.height / 2
-            ) < 1,
-          ordered: status.right <= button.left,
+          statusCount: el.querySelectorAll('[role="status"]').length,
+          cancelCount: el.querySelectorAll('button[aria-label="取消准备"]')
+            .length,
           fits: el.scrollWidth <= el.clientWidth,
         }
       })
-      expect(row).toEqual({ sameLine: true, ordered: true, fits: true })
+      expect(row).toEqual({ statusCount: 0, cancelCount: 1, fits: true })
+      await expect(first.getByRole("status")).toHaveCount(1)
       if (width === 1440 && count === 4)
         await first.screenshot({
           path: test.info().outputPath("preparing-inline.png"),
@@ -253,7 +303,9 @@ test("live start failure can retry and preparation can cancel", async ({
   await first.getByRole("button", { name: "取消准备" }).click()
   finishPreparation()
   await expect(first.getByRole("button", { name: "开始预览" })).toBeEnabled()
-  await expect(page.getByRole("button", { name: "全部停止" })).toBeDisabled()
+  await expect(
+    page.getByRole("button", { name: "停止全部预览" })
+  ).toBeDisabled()
   await expect(page.locator("video")).toHaveCount(0)
 })
 test("channel failure retries; empty channels disable playback", async ({
@@ -434,7 +486,7 @@ for (const mobile of [false, true])
       await page.getByRole("button", { name: "全部开始" }).click()
       expect(tracks[0]).toBe("101")
       expect(tracks.slice(1).sort()).toEqual(["201", "301", "301"])
-      await page.getByRole("button", { name: "全部停止" }).click()
+      await page.getByRole("button", { name: "停止全部预览" }).click()
       await expect(page.locator("video")).toHaveCount(0)
       await expect.poll(() => deleted.length).toBe(2)
       hold = false
@@ -450,7 +502,7 @@ for (const mobile of [false, true])
           () => document.documentElement.scrollWidth <= innerWidth
         )
       ).toBe(true)
-      await page.getByRole("button", { name: "全部停止" }).click()
+      await page.getByRole("button", { name: "停止全部预览" }).click()
       await expect.poll(() => deleted.length).toBe(5)
     } finally {
       releasePending()

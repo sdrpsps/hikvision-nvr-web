@@ -43,6 +43,8 @@ type Source =
 
 export type StreamPlayerHandle = { start: () => void }
 type PlaybackOptions = {
+  channelName?: string
+  timeZone?: string
   autoStart?: boolean
   initialPreferences?: PlaybackPreferences
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
@@ -340,9 +342,21 @@ export function StreamPlayer({
           session={session}
           playbackStatus={playbackStatus}
           live={live}
+          liveTrack={live ? track : undefined}
           onError={onError}
           actions={actions}
           frame={frame}
+          clipSource={
+            props.live
+              ? undefined
+              : {
+                  track: props.track,
+                  date: props.date,
+                  segmentId: props.segmentId,
+                  channelName: props.channelName ?? `通道 ${props.track}`,
+                  timeZone: props.timeZone,
+                }
+          }
           playbackControls={props.playbackControls}
           initialPreferences={props.initialPreferences}
           onPreferencesChange={props.onPreferencesChange}
@@ -351,7 +365,7 @@ export function StreamPlayer({
       ) : (
         <Empty className="stream-idle">
           <EmptyHeader>
-            <EmptyTitle>
+            <EmptyTitle role={loading ? "status" : undefined}>
               {loading
                 ? live
                   ? "正在连接通道"
@@ -367,11 +381,6 @@ export function StreamPlayer({
       {!session && (
         <div className="preview-control-row">
           {props.playbackControls}
-          {loading && (
-            <p role="status" className="truncate" title="正在准备预览，请稍候…">
-              正在准备预览，请稍候…
-            </p>
-          )}
           {actions}
         </div>
       )}

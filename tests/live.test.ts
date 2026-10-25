@@ -59,6 +59,7 @@ describe("live copy-only lifecycle", () => {
     ])
     expect(args.at(-1)).toContain("pipe:1")
     expect(args.at(-1)).toContain("pipe:3")
+    expect(args.at(-1)?.split("|")[0]).not.toContain("frag_duration")
     expect(args).toContain("0:a:0?")
     expect(args).not.toContain("-an")
     expect(args.join(" ")).not.toMatch(/libx26| -vf | -filter/)

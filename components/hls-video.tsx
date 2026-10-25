@@ -41,6 +41,11 @@ import { useStreamAudio } from "@/hooks/use-stream-api"
 import { PlaybackRate } from "@/components/playback-rate"
 import { LocalLiveAudio } from "@/lib/live-audio"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
+import { ClipExport, type ClipSource } from "@/components/clip-export"
+import {
+  LiveRecordingIndicator,
+  SaveFullscreenActivity,
+} from "@/components/browser-save-provider"
 
 export type PlaybackPreferences = { rate: number; sound: boolean }
 
@@ -55,6 +60,8 @@ export function HlsVideo({
   onPreferencesChange,
   onEnded,
   playbackStatus,
+  clipSource,
+  liveTrack,
 }: {
   session: LiveStream | Preview
   live?: boolean
@@ -66,6 +73,8 @@ export function HlsVideo({
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onEnded?: () => void
   playbackStatus?: PlaybackStatus
+  clipSource?: ClipSource
+  liveTrack?: string
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const loadAudio = useStreamAudio(session.id)
@@ -300,6 +309,8 @@ export function HlsVideo({
   )
   return (
     <div className="video-surface" ref={frame}>
+      <SaveFullscreenActivity />
+      {live && liveTrack && <LiveRecordingIndicator track={liveTrack} />}
       <video
         ref={video}
         className="preview-video"
@@ -445,7 +456,7 @@ export function HlsVideo({
                         }
                       />
                       <FieldDescription>
-                        从文件开头计算，支持分:秒或时:分:秒。
+                        从文件开头计算（分:秒 / 时:分:秒）
                       </FieldDescription>
                     </Field>
                     {locateError && (
@@ -522,6 +533,14 @@ export function HlsVideo({
             />
           )}
           {playbackControls}
+          {!live && clipSource && (
+            <ClipExport
+              source={clipSource}
+              position={position}
+              duration={totalDuration}
+              container={frame}
+            />
+          )}
           <div className="sound-control">
             <Switch
               id={soundId}

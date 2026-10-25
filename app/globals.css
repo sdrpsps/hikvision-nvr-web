@@ -186,21 +186,29 @@ body {
 }
 .console-nav {
   display: flex;
+  align-items: center;
   gap: 0.375rem;
 }
-.console-nav a {
+.console-nav :is(a, .save-tasks-trigger) {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  height: 2.25rem;
   padding: 0.5rem 0.875rem;
   border-radius: var(--radius-md);
   font-size: 0.8125rem;
+  font-weight: 400;
   color: var(--muted-foreground);
 }
-.console-nav a[aria-current="page"] {
+.console-nav :is(a, .save-tasks-trigger):hover,
+.console-nav a[aria-current="page"],
+.console-nav .save-tasks-trigger[aria-expanded="true"] {
   background: var(--secondary);
   color: var(--secondary-foreground);
+}
+.console-nav a[aria-current="page"],
+.console-nav .save-tasks-trigger[aria-expanded="true"] {
   font-weight: 600;
 }
 .console-nav svg {
@@ -402,6 +410,7 @@ body {
 }
 .live-window {
   position: relative;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -456,6 +465,7 @@ body {
   display: none;
 }
 .video-surface {
+  position: relative;
   min-width: 0;
   container-type: inline-size;
 }
@@ -491,11 +501,6 @@ body {
 .live-video-controls {
   justify-content: space-between;
   padding: 0.5rem 0.625rem;
-}
-.preview-control-row > [role="status"] {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.75rem;
 }
 .preview-actions {
   flex-shrink: 0;
@@ -831,10 +836,6 @@ body {
   flex-wrap: wrap;
   gap: 0.375rem 0.75rem;
 }
-.distribution-heading > span {
-  font-size: 0.75rem;
-  color: var(--muted-foreground);
-}
 .timeline-legend {
   display: flex;
   align-items: center;
@@ -964,6 +965,7 @@ body {
   .preview-control-row .control-label {
     display: none;
   }
+  .live-video-controls .player-control-button,
   .live-video-controls [data-slot="button"]:has(> .control-label),
   .preview-control-row [data-slot="button"]:has(> .control-label) {
     width: 1.75rem;
@@ -1168,4 +1170,241 @@ body {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Saving remains visible while the user watches other channels or pages. */
+.save-tasks-trigger {
+  height: 2.25rem;
+  flex-shrink: 0;
+}
+.save-task-attention {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--destructive);
+  color: var(--primary-foreground);
+  font-size: 0.7rem;
+}
+.save-activity-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-shrink: 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.save-activity {
+  max-width: 100rem;
+  margin-inline: auto;
+  padding: 0.5rem 1.5rem;
+}
+.save-activity-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.save-activity-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  font-size: 0.8125rem;
+}
+.save-activity-item[data-mode="live"] {
+  border-left-color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 5%, var(--card));
+}
+.save-activity-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+[data-mode="live"] > .save-activity-state {
+  color: var(--destructive);
+}
+.save-activity-state > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+}
+.save-record-dot {
+  fill: currentColor;
+}
+.save-activity-channel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.save-activity-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.save-activity-progress > span {
+  color: var(--muted-foreground);
+}
+.save-tasks-panel {
+  width: min(28rem, 100vw);
+  max-width: none;
+  max-height: 100dvh;
+  gap: 0;
+}
+.save-tasks-scroll {
+  flex: 1;
+  min-height: 0;
+}
+.save-tasks-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0 1rem 1rem;
+}
+.save-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.save-task-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+}
+.save-task-item > [data-slot="button"] {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+}
+.save-task-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.save-task-heading > strong {
+  min-width: 0;
+  flex: 1;
+  font-weight: 600;
+}
+.save-task-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1rem;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+.save-setup-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(30rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+}
+.save-setup-dialog > [data-slot="dialog-header"] {
+  flex-shrink: 0;
+  padding-right: 1.75rem;
+}
+.clip-export-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+}
+.save-setup-scroll {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+.save-setup-scroll > [data-slot="scroll-area-viewport"] {
+  height: auto;
+  min-height: 0;
+}
+.save-setup-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.25rem;
+}
+.save-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border);
+}
+.live-record-trigger {
+  flex-shrink: 0;
+  min-width: 3.625rem;
+  padding-inline: 0.375rem;
+}
+@container (max-width: 12rem) {
+  .live-record-trigger {
+    min-width: 1.75rem;
+    padding-inline: 0.25rem;
+  }
+  .live-record-trigger > span {
+    display: none;
+  }
+}
+.save-fullscreen-activity {
+  display: none;
+}
+.live-recording-indicator {
+  position: absolute;
+  top: 0.625rem;
+  right: 0.625rem;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.video-surface:fullscreen .save-fullscreen-activity {
+  display: inline-flex;
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 1;
+  max-width: calc(100% - 2rem);
+}
+.video-surface:fullscreen .live-recording-indicator {
+  top: 3.5rem;
+  right: 1rem;
+}
+@media (max-width: 767px) {
+  .save-activity { padding-inline: 0.75rem; }
+  .save-tasks-trigger { flex: 1; }
+  .console-nav { gap: 0.25rem; }
+}
+@media (max-width: 540px) {
+  .save-activity-item {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.375rem 0.625rem;
+  }
+  .save-activity-channel { grid-column: 2 / -1; }
+  .save-activity-progress { grid-column: 1 / 3; }
+  .save-activity-item > [data-slot="button"] { grid-column: 3; }
+  .save-task-label { font-size: 0.75rem; }
 }

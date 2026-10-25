@@ -32,6 +32,10 @@ import {
 } from "@/components/ui/empty"
 import { ConsoleNav } from "@/components/console-nav"
 import {
+  LiveRecordButton,
+  SaveActivityBar,
+} from "@/components/browser-save-provider"
+import {
   StreamPlayer,
   type StreamPlayerHandle,
 } from "@/components/preview-player"
@@ -72,6 +76,7 @@ export function LiveConsole() {
         </div>
         <ConsoleNav active="live" />
       </header>
+      <SaveActivityBar />
       <main className="console-main live-main">
         <h1 className="sr-only">实时预览</h1>
         <div className="console-toolbar">
@@ -127,7 +132,7 @@ export function LiveConsole() {
               onClick={() => setGeneration((value) => value + 1)}
             >
               <SquareIcon data-icon="inline-start" />
-              全部停止
+              停止全部预览
             </Button>
           </div>
         </div>
@@ -307,6 +312,15 @@ export function LiveConsole() {
                           </SelectGroup>
                         </SelectContent>
                       </Select>
+                      <LiveRecordButton
+                        track={trackFor(index)}
+                        timeZone={channelsQuery.data?.timeZone}
+                        name={
+                          channels?.find(
+                            (channel) => channel.id === trackFor(index)
+                          )?.name ?? "摄像头"
+                        }
+                      />
                     </div>
                     <StreamPlayer
                       ref={(player) => {
