@@ -64,6 +64,8 @@ export const previewRequestSchema = recordingsQuerySchema.extend({
   segmentId: z.string().regex(/^[a-f0-9]{32}$/),
 })
 export const previewSchema = z.object({
+  fileRange: intervalSchema.optional(),
+  startOffsetSeconds: z.number().finite().nonnegative().optional(),
   id: z.uuid(),
   playlistUrl: z.string().regex(/^\/api\/streams\/[a-f0-9-]{36}\/index\.m3u8$/),
   durationSeconds: z.number().finite().positive(),
@@ -92,6 +94,8 @@ export const transferEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("end"), reason: z.literal("timeout") }),
 ])
 export const liveSchema = previewSchema.omit({
+  fileRange: true,
+  startOffsetSeconds: true,
   durationSeconds: true,
   estimatedDurationSeconds: true,
   totalDurationSeconds: true,

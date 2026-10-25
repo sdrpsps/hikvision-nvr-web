@@ -50,7 +50,14 @@ export async function requestJson<T>(
   init: RequestInit = {},
   messages: ResponseMessages = {}
 ): Promise<T> {
-  const response = await readResponse(path, init)
+  const response = await readResponse(path, init).catch((error: unknown) => {
+    if (init.signal?.aborted) throw error
+    throw new ApiError(
+      messages.unavailable ?? "无法连接本机服务，请确认服务已启动后重试。",
+      0,
+      "NETWORK_ERROR"
+    )
+  })
   const body = await readJson(response, init.signal)
   if (!response.ok)
     throw responseError(body, response.status, messages.unavailable)

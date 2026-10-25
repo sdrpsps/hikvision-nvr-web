@@ -55,6 +55,35 @@ for (const mobile of [false, true])
         .click()
       await expect(page.locator(".video-wall-cell")).toHaveCount(count)
       await expect(page.locator("video")).toHaveCount(0)
+      const playButtons = await page
+        .locator(".stream-idle")
+        .evaluateAll((frames) =>
+          frames.map((frame) => {
+            const button = frame.querySelector<HTMLElement>(
+              'button[aria-label="开始预览"]'
+            )!
+            const bounds = frame.getBoundingClientRect()
+            const control = button.getBoundingClientRect()
+            return {
+              centeredX:
+                Math.abs(
+                  control.x + control.width / 2 - bounds.x - bounds.width / 2
+                ) < 1,
+              centeredY:
+                Math.abs(
+                  control.y + control.height / 2 - bounds.y - bounds.height / 2
+                ) < 1,
+              visible: control.width > 0 && control.height > 0,
+            }
+          })
+        )
+      expect(playButtons).toHaveLength(count)
+      for (const button of playButtons)
+        expect(button).toEqual({
+          centeredX: true,
+          centeredY: true,
+          visible: true,
+        })
       const headings = await page
         .locator(".live-window-heading")
         .evaluateAll((elements) =>
@@ -252,8 +281,8 @@ for (const codec of ["h264", "hevc"] as const)
     await window1.getByRole("button", { name: "开始预览" }).click()
     await expect(page.locator("video")).toHaveCount(1)
     await page.getByRole("link", { name: "录像回放" }).click()
-    await expect.poll(() => deleted.length).toBe(4)
     await expect(page).toHaveURL(/\/playback$/)
+    await expect.poll(() => deleted.length).toBe(4)
   })
 test.describe("live startup buffering", () => {
   async function prepare(page: Page) {
@@ -690,12 +719,15 @@ test("live start failure can retry and preparation can cancel", async ({
   await page.goto("/")
   const first = page.getByRole("region", { name: "窗口 1", exact: true })
   await first.getByRole("button", { name: "开始预览" }).click()
-  await expect(page.getByText("实时连接超时。")).toBeVisible()
+  await expect(first.locator('.stream-player [role="alert"]')).toHaveText(
+    "实时连接超时。"
+  )
   await expect(
     page.getByRole("button", { name: "停止全部预览" })
   ).toBeDisabled()
   await first.getByRole("button", { name: "重试", exact: true }).click()
   await expect(first.getByRole("status")).toHaveText("正在连接通道")
+  await expect(first.locator(".stream-idle .animate-spin")).toBeVisible()
   await expect(page.getByRole("button", { name: "停止全部预览" })).toBeEnabled()
   for (const width of [1440, 1280, 375]) {
     await page.setViewportSize({ width, height: 1000 })
@@ -914,7 +946,11 @@ for (const mobile of [false, true])
       await expect(first.locator("video")).toHaveCount(1)
       await page.getByRole("button", { name: "全部开始" }).click()
       await expect.poll(() => tracks.length).toBe(3)
-      await expect(page.getByText("第三路连接超时。")).toBeVisible()
+      await expect(
+        page
+          .locator('.stream-player [role="alert"]')
+          .filter({ hasText: "第三路连接超时。" })
+      ).toBeVisible()
       await page.getByRole("button", { name: "全部开始" }).click()
       await expect.poll(() => tracks.length).toBe(4)
       await expect(page.locator("video")).toHaveCount(2)

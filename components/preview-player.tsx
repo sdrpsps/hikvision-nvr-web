@@ -11,7 +11,13 @@ import {
   type RefObject,
   type ReactNode,
 } from "react"
-import { EllipsisIcon, PlayIcon, RefreshCwIcon, XIcon } from "lucide-react"
+import {
+  EllipsisIcon,
+  LoaderCircleIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  XIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
@@ -21,6 +27,7 @@ import {
   EmptyDescription,
 } from "@/components/ui/empty"
 import type { Preview, LiveStream } from "@/shared/contracts"
+import type { PlaybackTimeRequest } from "@/lib/playback-clock"
 import { HlsVideo, type PlaybackPreferences } from "@/components/hls-video"
 import { VideoWall } from "@/components/video-wall"
 import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
@@ -50,8 +57,10 @@ type PlaybackOptions = {
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onPlaybackEnded?: () => void
   onStop?: () => void
-  playbackControls?: ReactNode
   onActivityChange?: (active: boolean) => void
+  requestedTime?: PlaybackTimeRequest
+  onPlaybackTimeChange?: (at: string | undefined) => void
+  timeline?: ReactNode
 }
 
 export function PreviewPlayer(
@@ -89,6 +98,12 @@ export function StreamPlayer({
   const failed = useRef(false)
   const feedbackId = useId()
   const ending = useRef<AbortController | null>(null)
+  const releasingPlayback = useRef<{
+    id: string
+    restartRevision?: number
+  } | null>(null)
+  const lastStartRequest = useRef<number | undefined>(undefined)
+  const automaticallyStarted = useRef(false)
   const frame = useRef<HTMLDivElement>(null)
   const callbacks = useRef(props)
   useEffect(() => {
@@ -121,11 +136,15 @@ export function StreamPlayer({
       failed.current = true
       ending.current?.abort()
       ending.current = null
+      const releasingId = releasingPlayback.current?.id
+      releasingPlayback.current = null
       setError(message)
       notifyError(message)
-      if (activeId.current) void release(activeId.current)
+      if (activeId.current && activeId.current !== releasingId)
+        void release(activeId.current)
       activeId.current = null
       setSession(undefined)
+      callbacks.current.onPlaybackTimeChange?.(undefined)
       callbacks.current.onStop?.()
     },
     [release, notifyError]
@@ -144,7 +163,10 @@ export function StreamPlayer({
     const cleanup = () => {
       request.current?.abort()
       ending.current?.abort()
-      if (activeId.current) void release(activeId.current)
+      const releasingId = releasingPlayback.current?.id
+      releasingPlayback.current = null
+      if (activeId.current && activeId.current !== releasingId)
+        void release(activeId.current)
       activeId.current = null
     }
     window.addEventListener("pagehide", cleanup)
@@ -160,22 +182,27 @@ export function StreamPlayer({
       () => {
         setExpired(true)
         if (activeId.current === session.id) {
-          void release(session.id)
+          if (releasingPlayback.current?.id !== session.id)
+            void release(session.id)
           activeId.current = null
         }
-        if (live) setSession(undefined)
+        setSession(undefined)
+        callbacks.current.onPlaybackTimeChange?.(undefined)
+        callbacks.current.onStop?.()
       },
       Math.max(0, Date.parse(session.expiresAt) - Date.now())
     )
     return () => clearTimeout(timer)
-  }, [session, live, release])
+  }, [session, release])
   const close = useCallback(
     (notify = false) => {
       request.current?.abort()
       ending.current?.abort()
       ending.current = null
+      const releasingId = releasingPlayback.current?.id
+      releasingPlayback.current = null
       request.current = null
-      if (activeId.current) {
+      if (activeId.current && activeId.current !== releasingId) {
         void release(activeId.current).then((released) => {
           if (notify && !released) {
             toast.warning(
@@ -191,6 +218,7 @@ export function StreamPlayer({
       activeId.current = null
       failed.current = false
       setSession(undefined)
+      callbacks.current.onPlaybackTimeChange?.(undefined)
       setLoading(false)
       setExpired(false)
       setError("")
@@ -216,6 +244,16 @@ export function StreamPlayer({
       if (controller.signal.aborted) {
         void release(session.id)
         return
+      }
+      if (
+        !live &&
+        callbacks.current.requestedTime &&
+        !("fileRange" in session && session.fileRange)
+      ) {
+        void release(session.id)
+        throw new Error(
+          "无法确认录像文件的起始时间，暂不能定位到所选时间。请刷新后重试。"
+        )
       }
       activeId.current = session.id
       setSession(session)
@@ -246,19 +284,46 @@ export function StreamPlayer({
     sourceSegment,
     onError,
   ])
+  const requestedRevision = props.requestedTime?.revision
   useEffect(() => {
-    if (!props.autoStart || live) return
+    if (live) return
     let cancelled = false
     queueMicrotask(() => {
-      if (!cancelled) void prepare()
+      if (cancelled) return
+      const requested =
+        requestedRevision !== undefined &&
+        requestedRevision !== lastStartRequest.current
+      const automatic = props.autoStart && !automaticallyStarted.current
+      if (!requested && !automatic) return
+      if (requested) lastStartRequest.current = requestedRevision
+      if (props.autoStart) automaticallyStarted.current = true
+      if (requested) {
+        ending.current?.abort()
+        ending.current = null
+        // An in-flight DELETE cannot be undone. Finish releasing that session
+        // before reopening the latest target in the same recording.
+        if (releasingPlayback.current) {
+          releasingPlayback.current.restartRevision = requestedRevision
+          setSession(undefined)
+          setLoading(true)
+          return
+        }
+      }
+      if (!activeId.current && !request.current) void prepare()
     })
     return () => {
       cancelled = true
     }
-  }, [props.autoStart, live, prepare])
+  }, [props.autoStart, requestedRevision, live, prepare])
   async function finishPlayback() {
     const id = activeId.current
-    if (live || !id || ending.current || !callbacks.current.onPlaybackEnded)
+    if (
+      live ||
+      !id ||
+      ending.current ||
+      releasingPlayback.current ||
+      !callbacks.current.onPlaybackEnded
+    )
       return
     const controller = new AbortController()
     ending.current = controller
@@ -273,7 +338,25 @@ export function StreamPlayer({
         return
       }
       if (!callbacks.current.onPlaybackEnded) return
+      const handoff: { id: string; restartRevision?: number } = { id }
+      releasingPlayback.current = handoff
       const released = await release(id)
+      if (releasingPlayback.current !== handoff) return
+      releasingPlayback.current = null
+      if (
+        handoff.restartRevision !== undefined &&
+        handoff.restartRevision === callbacks.current.requestedTime?.revision &&
+        activeId.current === id
+      ) {
+        if (!released) {
+          setLoading(false)
+          onError("无法关闭上一段录像，请重试。")
+          return
+        }
+        activeId.current = null
+        void prepare()
+        return
+      }
       if (controller.signal.aborted || activeId.current !== id) return
       if (!released) throw new Error("无法关闭上一段录像，请重试。")
       activeId.current = null
@@ -293,27 +376,11 @@ export function StreamPlayer({
       if (track && !activeId.current && !request.current) void prepare()
     },
   }))
-  const restartLabel = live ? "重新连接" : "从头播放"
+  const restartLabel = live ? "重新连接" : "从所选起点播放"
   const startLabel = error || expired ? "重试" : live ? "开始预览" : "播放"
   const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
     <div className="preview-actions">
-      {!loading && (!session || error || expired) && (
-        <Button
-          size="sm"
-          disabled={!track}
-          aria-label={startLabel}
-          title={startLabel}
-          onClick={() => void prepare()}
-        >
-          {error || expired ? (
-            <RefreshCwIcon data-icon="inline-start" />
-          ) : (
-            <PlayIcon data-icon="inline-start" />
-          )}
-          <span className="control-label">{startLabel}</span>
-        </Button>
-      )}
       {session && !error && !expired && (
         <RestartAction
           container={frame}
@@ -360,6 +427,9 @@ export function StreamPlayer({
           playbackStatus={playbackStatus}
           live={live}
           liveTrack={live ? track : undefined}
+          requestedTime={props.requestedTime}
+          onPlaybackTimeChange={props.onPlaybackTimeChange}
+          timeline={props.timeline}
           onError={onError}
           actions={actions}
           frame={frame}
@@ -374,34 +444,52 @@ export function StreamPlayer({
                   timeZone: props.timeZone,
                 }
           }
-          playbackControls={props.playbackControls}
           initialPreferences={props.initialPreferences}
           onPreferencesChange={props.onPreferencesChange}
           onEnded={() => void finishPlayback()}
         />
       ) : (
-        <Empty className="stream-idle">
-          <EmptyHeader>
-            <EmptyTitle role={loading ? "status" : undefined}>
-              {loading
-                ? live
-                  ? "正在连接通道"
-                  : "正在准备录像"
-                : error
-                  ? "预览未完成"
-                  : "画面未开启"}
-            </EmptyTitle>
-            {expired && (
-              <EmptyDescription>本次连接已到期，请重试。</EmptyDescription>
-            )}
-          </EmptyHeader>
+        <Empty className="stream-idle" aria-busy={loading}>
+          {!loading && (
+            <Button
+              className="playback-center-button"
+              size="icon-lg"
+              disabled={!track}
+              aria-label={startLabel}
+              title={startLabel}
+              onClick={() => void prepare()}
+            >
+              {error || expired ? <RefreshCwIcon /> : <PlayIcon />}
+            </Button>
+          )}
+          {(loading || error || expired) && (
+            <EmptyHeader>
+              {loading && (
+                <LoaderCircleIcon
+                  className="player-loading-icon animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+              <EmptyTitle role={loading ? "status" : undefined}>
+                {loading
+                  ? live
+                    ? "正在连接通道"
+                    : "正在准备录像"
+                  : "预览未完成"}
+              </EmptyTitle>
+              {expired && (
+                <EmptyDescription>本次连接已到期，请重试。</EmptyDescription>
+              )}
+              {error && (
+                <EmptyDescription role="alert">{error}</EmptyDescription>
+              )}
+            </EmptyHeader>
+          )}
         </Empty>
       )}
-      {!session && (
-        <div className="preview-control-row">
-          {props.playbackControls}
-          {actions}
-        </div>
+      {!session && props.timeline}
+      {!session && loading && (
+        <div className="preview-control-row">{actions}</div>
       )}
     </section>
   )

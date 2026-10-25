@@ -56,6 +56,10 @@ test("playback links restore filters, update URL, and support back/forward and r
   await expect(
     page.getByRole("button", { name: "4 倍", exact: true })
   ).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("slider", { name: "回放时间轴" })).toBeDisabled()
+  await expect(
+    page.locator(".playback-player").getByRole("slider")
+  ).toHaveCount(1)
   await selectOption(page, "摄像头", "摄像头一")
   await expect.poll(() => params(page).get("track")).toBe("101")
   await selectDate(page, "2026-10-23")

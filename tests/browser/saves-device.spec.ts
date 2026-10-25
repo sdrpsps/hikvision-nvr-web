@@ -710,8 +710,14 @@ test.describe("real NVR browser recording and streaming exports", () => {
     )
       await selectOption(page, "摄像头", channel.name)
     await selectDate(page, date)
-    await page.locator(".timeline-segment").nth(segmentIndex).click()
-    await page.getByRole("button", { name: "播放", exact: true }).click()
+    const list = page.getByRole("button", { name: "片段列表", exact: true })
+    await list.click()
+    await page
+      .getByRole("button", {
+        name: new RegExp(`^选择片段 ${segmentIndex + 1}，`),
+      })
+      .click()
+    await list.click()
     await expect
       .poll(
         () =>

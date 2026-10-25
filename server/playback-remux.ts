@@ -19,10 +19,12 @@ export function playbackRemuxArguments() {
   args.splice(args.indexOf("-an"), 1)
   args.splice(args.indexOf("-map") + 2, 0, "-map", "0:a:0?", "-c:a", "copy")
   args.splice(args.indexOf("-movflags"))
+  // Historical seeking may start with any listed video fragment. Keep each
+  // fragment on a keyframe so the decoder never needs an earlier fragment.
   args.push(
     "-f",
     "tee",
-    "[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:frag_duration=2000000:select=v]pipe:1|[f=mov:movflags=+frag_keyframe+empty_moov+default_base_moof:frag_duration=500000:select=a:onfail=ignore]pipe:3"
+    "[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof:select=v]pipe:1|[f=mov:movflags=+frag_keyframe+empty_moov+default_base_moof:frag_duration=500000:select=a:onfail=ignore]pipe:3"
   )
   return args
 }

@@ -8,41 +8,30 @@ import {
   useState,
   type ReactNode,
   type RefObject,
-  type CSSProperties,
 } from "react"
 import {
+  LoaderCircleIcon,
   MaximizeIcon,
   PauseIcon,
   PlayIcon,
   Volume2Icon,
   VolumeXIcon,
-  LocateIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { Slider } from "@/components/ui/slider"
-import { Input } from "@/components/ui/input"
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldDescription,
-} from "@/components/ui/field"
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-  PopoverTitle,
-} from "@/components/ui/popover"
-import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
 import { useStreamAudio } from "@/hooks/use-stream-api"
 import { PlaybackRate } from "@/components/playback-rate"
 import { LocalLiveAudio } from "@/lib/live-audio"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
 import { ClipExport, type ClipSource } from "@/components/clip-export"
+import {
+  playbackInstant,
+  playbackOffset,
+  type PlaybackTimeRequest,
+} from "@/lib/playback-clock"
 import {
   LiveRecordingIndicator,
   SaveFullscreenActivity,
@@ -56,26 +45,30 @@ export function HlsVideo({
   onError,
   actions,
   frame,
-  playbackControls,
   initialPreferences,
   onPreferencesChange,
   onEnded,
   playbackStatus,
   clipSource,
   liveTrack,
+  requestedTime,
+  onPlaybackTimeChange,
+  timeline,
 }: {
   session: LiveStream | Preview
   live?: boolean
   onError: (message: string) => void
   actions?: ReactNode
   frame: RefObject<HTMLDivElement | null>
-  playbackControls?: ReactNode
   initialPreferences?: PlaybackPreferences
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onEnded?: () => void
   playbackStatus?: PlaybackStatus
   clipSource?: ClipSource
   liveTrack?: string
+  requestedTime?: PlaybackTimeRequest
+  onPlaybackTimeChange?: (at: string | undefined) => void
+  timeline?: ReactNode
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const loadAudio = useStreamAudio(session.id)
@@ -85,15 +78,24 @@ export function HlsVideo({
   const [paused, setPaused] = useState(true)
   const [liveStarted, setLiveStarted] = useState(false)
   const [position, setPosition] = useState(0)
+  const [historyReady, setHistoryReady] = useState(false)
   const [duration, setDuration] = useState(0)
-  const [pendingSeek, setPendingSeek] = useState<number | null>(null)
-  const seekTarget = useRef<number | null>(null)
-  const [scrub, setScrub] = useState<{ seconds: number; duration: number }>()
-  const [locateOpen, setLocateOpen] = useState(false)
-  const [locateInput, setLocateInput] = useState("")
-  const [locateError, setLocateError] = useState("")
-  const locateId = useId()
-  const portalContainer = useFullscreenContainer(frame)
+  const recorded = "durationSeconds" in session ? session : undefined
+  const fileStart = recorded?.fileRange?.startAt
+  const [initialOffset] = useState(() =>
+    requestedTime && fileStart
+      ? Math.max(0, playbackOffset(requestedTime.at, fileStart))
+      : (recorded?.startOffsetSeconds ?? 0)
+  )
+  const lastRequest = useRef(requestedTime?.revision)
+  const resumeAfterSeek = useRef(initialOffset > 0)
+  const initialSeek = useRef(initialOffset > 0)
+  const [pendingSeek, setPendingSeek] = useState<number | null>(
+    initialOffset > 0 ? initialOffset : null
+  )
+  const seekTarget = useRef<number | null>(
+    initialOffset > 0 ? initialOffset : null
+  )
   const [rate, setRate] = useState(initialPreferences?.rate ?? 1)
   const preferences = useRef(initialPreferences)
   const soundId = useId()
@@ -108,7 +110,6 @@ export function HlsVideo({
     },
     [session.id, live, liveTrack, clipSource?.channelName]
   )
-  const recorded = "durationSeconds" in session ? session : undefined
   const totalDuration = playbackStatus?.complete
     ? (playbackStatus.totalDurationSeconds ?? playbackStatus.durationSeconds)
     : recorded?.totalDurationSeconds
@@ -117,23 +118,61 @@ export function HlsVideo({
     playbackStatus?.durationSeconds ?? 0,
     duration
   )
-  const estimate = recorded?.estimatedDurationSeconds
-  // An estimate that media has already exceeded is no longer a useful scale.
-  const timelineDuration =
-    totalDuration ??
-    (estimate && availableDuration <= estimate + 1 ? estimate : 0)
-  const sliderDuration = scrub?.duration ?? timelineDuration
+  const publishPosition = useCallback(
+    (seconds: number) => {
+      setPosition(seconds)
+      onPlaybackTimeChange?.(
+        fileStart ? playbackInstant(fileStart, seconds) : undefined
+      )
+    },
+    [fileStart, onPlaybackTimeChange]
+  )
   const cancelSeek = () => {
+    if (initialSeek.current) {
+      onError("所选时间的定位已取消，请重新播放。")
+      return
+    }
+    initialSeek.current = false
+    resumeAfterSeek.current = false
     seekTarget.current = null
     setPendingSeek(null)
+    if (video.current) publishPosition(video.current.currentTime)
   }
+  const finishSeek = useCallback(() => {
+    const element = video.current,
+      target = seekTarget.current
+    if (
+      !element ||
+      target === null ||
+      element.seeking ||
+      Math.abs(element.currentTime - target) > 0.5 ||
+      element.readyState < 2
+    )
+      return
+    initialSeek.current = false
+    seekTarget.current = null
+    setPendingSeek(null)
+    setHistoryReady(true)
+    publishPosition(element.currentTime)
+    if (resumeAfterSeek.current) {
+      resumeAfterSeek.current = false
+      void element
+        .play()
+        .catch(() => reportError("播放未能开始，请点击播放。", "play"))
+    }
+  }, [publishPosition, reportError])
   const applyPendingSeek = useCallback(() => {
     const element = video.current,
       target = seekTarget.current
     if (!element || target === null) return
-    if (totalDuration !== undefined && target > totalDuration) {
+    if (totalDuration !== undefined && target >= totalDuration) {
+      if (initialSeek.current) {
+        onError("所选起点超出实际文件范围，请刷新录像后重试。")
+        return
+      }
       seekTarget.current = null
       setPendingSeek(null)
+      publishPosition(element.currentTime)
       reportError(
         `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`,
         "seek"
@@ -154,22 +193,50 @@ export function HlsVideo({
         seekable = true
     if (!seekable) return
     try {
-      element.currentTime = target
-      setPosition(target)
-      seekTarget.current = null
-      setPendingSeek(null)
+      if (!element.seeking && Math.abs(element.currentTime - target) > 0.05)
+        element.currentTime = target
+      finishSeek()
     } catch {
       seekTarget.current = null
       setPendingSeek(null)
       reportError("暂时无法跳转，请稍后重试。", "seek")
     }
-  }, [totalDuration, reportError])
-  function requestSeek(seconds: number) {
-    if (!Number.isFinite(seconds) || seconds < 0) return
-    seekTarget.current = seconds
-    setPendingSeek(seconds)
-    applyPendingSeek()
-  }
+  }, [totalDuration, reportError, onError, finishSeek, publishPosition])
+  const requestSeek = useCallback(
+    (seconds: number) => {
+      if (!Number.isFinite(seconds) || seconds < 0) return
+      resumeAfterSeek.current = true
+      video.current?.pause()
+      onPlaybackTimeChange?.(undefined)
+      seekTarget.current = seconds
+      setPendingSeek(seconds)
+      applyPendingSeek()
+    },
+    [applyPendingSeek, onPlaybackTimeChange]
+  )
+  useEffect(() => {
+    if (!requestedTime || requestedTime.revision === lastRequest.current) return
+    lastRequest.current = requestedTime.revision
+    if (!fileStart) return
+    const seconds = playbackOffset(requestedTime.at, fileStart)
+    queueMicrotask(() => requestSeek(seconds))
+  }, [requestedTime, fileStart, requestSeek])
+  useEffect(() => {
+    if (pendingSeek === null) return
+    const timer = setInterval(applyPendingSeek, 250)
+    return () => clearInterval(timer)
+  }, [pendingSeek, applyPendingSeek])
+  const targetAvailable =
+    pendingSeek === null || availableDuration > pendingSeek
+  useEffect(() => {
+    if (live || !targetAvailable || (historyReady && pendingSeek === null))
+      return
+    const timer = setTimeout(
+      () => onError("等待录像画面或定位超时，请重试。"),
+      30_000
+    )
+    return () => clearTimeout(timer)
+  }, [live, targetAvailable, historyReady, pendingSeek, onError])
   useEffect(() => {
     const frame = requestAnimationFrame(applyPendingSeek)
     return () => cancelAnimationFrame(frame)
@@ -240,7 +307,7 @@ export function HlsVideo({
             maxBufferLength: live ? 12 : 35,
             // Keep prior GOPs when short fragments share decoding dependencies.
             backBufferLength: live ? 12 : 35,
-            startPosition: live ? -1 : 0,
+            startPosition: live ? -1 : initialOffset,
           })
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal) fail()
@@ -267,7 +334,7 @@ export function HlsVideo({
       element.removeAttribute("src")
       element.load()
     }
-  }, [session, live, onError, reportError])
+  }, [session, live, onError, reportError, initialOffset])
   const enableSound = useCallback(async () => {
     if (audio.current) return
     if (!video.current) return
@@ -322,6 +389,15 @@ export function HlsVideo({
       void enableSound()
     }
   }
+  function togglePlayback() {
+    const element = video.current
+    if (!element) return
+    if (element.paused) {
+      void element.play().catch(() => {
+        reportError("播放未能开始，请再次点击播放。", "play")
+      })
+    } else element.pause()
+  }
   return (
     <div
       className="video-surface"
@@ -330,221 +406,115 @@ export function HlsVideo({
     >
       <SaveFullscreenActivity />
       {live && liveTrack && <LiveRecordingIndicator track={liveTrack} />}
-      <video
-        ref={video}
-        className="preview-video"
-        playsInline
-        muted
-        autoPlay
-        preload="auto"
-        aria-label={live ? "实时预览画面" : "历史录像预览"}
-        onPlay={() => {
-          setPaused(false)
-        }}
-        onPlaying={() => {
-          if (live) setLiveStarted(true)
-        }}
-        onPause={() => setPaused(true)}
-        onEnded={(event) => {
-          if (!event.currentTarget.ended) return
-          setPaused(true)
-          if (seekTarget.current !== null) {
+      <div className="playback-frame">
+        <video
+          ref={video}
+          className="preview-video"
+          style={{
+            visibility:
+              !live && (pendingSeek !== null || !historyReady)
+                ? "hidden"
+                : undefined,
+          }}
+          playsInline
+          muted
+          autoPlay={initialOffset === 0}
+          preload="auto"
+          aria-label={live ? "实时预览画面" : "历史录像预览"}
+          onPlay={() => {
+            setPaused(false)
+          }}
+          onPlaying={() => {
+            if (live) setLiveStarted(true)
+            else if (seekTarget.current === null) setHistoryReady(true)
+          }}
+          onPause={() => setPaused(true)}
+          onEnded={(event) => {
+            if (!event.currentTarget.ended) return
+            setPaused(true)
+            if (seekTarget.current !== null) {
+              applyPendingSeek()
+              return
+            }
+            onEnded?.()
+          }}
+          onTimeUpdate={(event) => {
+            if (
+              !live &&
+              seekTarget.current === null &&
+              !event.currentTarget.seeking &&
+              event.currentTarget.readyState >= 2
+            )
+              publishPosition(event.currentTarget.currentTime)
+          }}
+          onSeeked={finishSeek}
+          onDurationChange={(event) => {
+            const seconds = event.currentTarget.duration
+            if (!live)
+              setDuration(Number.isFinite(seconds) && seconds > 0 ? seconds : 0)
             applyPendingSeek()
-            return
-          }
-          onEnded?.()
-        }}
-        onTimeUpdate={(event) => {
-          if (!live) setPosition(event.currentTarget.currentTime)
-        }}
-        onDurationChange={(event) => {
-          const seconds = event.currentTarget.duration
-          if (!live)
-            setDuration(Number.isFinite(seconds) && seconds > 0 ? seconds : 0)
-          applyPendingSeek()
-        }}
-        onProgress={applyPendingSeek}
-        onLoadedMetadata={applyPendingSeek}
-        onCanPlay={applyPendingSeek}
-        onRateChange={(event) => setRate(event.currentTarget.playbackRate)}
-      />
-      {live && !liveStarted && (
-        <Empty
-          className="live-startup"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <EmptyHeader>
-            <EmptyTitle>正在缓冲画面</EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      )}
-      {!live && (
-        <>
-          <div className="playback-timeline">
-            <span>{mediaTime(scrub?.seconds ?? position)}</span>
-            <div className="playback-seek-track">
-              <Slider
-                className="playback-seek-slider"
-                style={
-                  {
-                    "--playback-read-percent": `${sliderDuration ? Math.min(100, (availableDuration / sliderDuration) * 100) : 0}%`,
-                    "--playback-position-percent": `${sliderDuration ? Math.min(100, (position / sliderDuration) * 100) : 0}%`,
-                  } as CSSProperties
-                }
-                aria-label="播放进度"
-                getAriaValueText={(_formatted, seconds) => mediaTime(seconds)}
-                value={[
-                  Math.min(
-                    scrub?.seconds ?? pendingSeek ?? position,
-                    sliderDuration || 0
-                  ),
-                ]}
-                min={0}
-                max={sliderDuration || 1}
-                step={0.1}
-                disabled={!sliderDuration}
-                onValueChange={(value) => {
-                  const seconds = Array.isArray(value) ? value[0] : value
-                  if (Number.isFinite(seconds))
-                    setScrub({ seconds, duration: sliderDuration })
-                }}
-                onValueCommitted={(value) => {
-                  const seconds = Array.isArray(value) ? value[0] : value
-                  setScrub(undefined)
-                  requestSeek(seconds)
-                }}
-              />
-              {pendingSeek !== null && sliderDuration > 0 && (
-                <span
-                  className="playback-seek-target"
-                  aria-hidden="true"
-                  style={{
-                    left: `${Math.min(100, (position / sliderDuration) * 100)}%`,
-                  }}
-                />
-              )}
-            </div>
-            <span>
-              {timelineDuration
-                ? `${totalDuration === undefined ? "约 " : ""}${mediaTime(Math.round(timelineDuration))}`
-                : "时长确认中"}
+          }}
+          onProgress={applyPendingSeek}
+          onLoadedMetadata={applyPendingSeek}
+          onCanPlay={(event) => {
+            applyPendingSeek()
+            if (!live && seekTarget.current === null) {
+              setHistoryReady(true)
+              publishPosition(event.currentTarget.currentTime)
+            }
+          }}
+          onRateChange={(event) => setRate(event.currentTarget.playbackRate)}
+        />
+        {!live && historyReady && pendingSeek === null && (
+          <Button
+            className="playback-surface-button"
+            variant="ghost"
+            data-paused={paused}
+            aria-label={paused ? "播放录像" : "暂停录像"}
+            title={paused ? "播放录像" : "暂停录像"}
+            onClick={togglePlayback}
+          >
+            <span className="playback-center-icon" aria-hidden="true">
+              {paused ? <PlayIcon /> : <PauseIcon />}
             </span>
-            <Popover
-              open={locateOpen}
-              onOpenChange={(open) => {
-                setLocateOpen(open)
-                if (open) {
-                  setLocateInput(mediaTime(position))
-                  setLocateError("")
-                }
-              }}
-            >
-              <PopoverTrigger
-                render={
-                  <Button variant="ghost" size="sm" aria-label="定位时间" />
-                }
-              >
-                <LocateIcon data-icon="inline-start" />
-                定位
-              </PopoverTrigger>
-              <PopoverContent
-                container={portalContainer}
-                side="top"
-                align="end"
-              >
-                <PopoverTitle>定位到文件内时间</PopoverTitle>
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    const seconds = parseMediaTime(locateInput)
-                    if (seconds === undefined) {
-                      setLocateError("请输入分:秒或时:分:秒，例如 01:20:00。")
-                      return
-                    }
-                    if (
-                      totalDuration !== undefined &&
-                      seconds > totalDuration
-                    ) {
-                      setLocateError(
-                        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`
-                      )
-                      return
-                    }
-                    requestSeek(seconds)
-                    setLocateOpen(false)
-                  }}
-                >
-                  <FieldGroup className="gap-3">
-                    <Field data-invalid={!!locateError}>
-                      <FieldLabel htmlFor={locateId}>文件内时间</FieldLabel>
-                      <Input
-                        id={locateId}
-                        aria-invalid={!!locateError}
-                        placeholder="01:20:00"
-                        value={locateInput}
-                        onChange={(event) =>
-                          setLocateInput(event.currentTarget.value)
-                        }
-                      />
-                      <FieldDescription>
-                        从文件开头计算（分:秒 / 时:分:秒）
-                      </FieldDescription>
-                    </Field>
-                    {locateError && (
-                      <p role="alert" className="text-sm text-destructive">
-                        {locateError}
-                      </p>
-                    )}
-                    <Button type="submit" size="sm">
-                      跳转
-                    </Button>
-                  </FieldGroup>
-                </form>
-              </PopoverContent>
-            </Popover>
-          </div>
-          <div className="playback-read-status">
-            <p role="status">
-              {pendingSeek !== null
-                ? `正在读取至 ${mediaTime(pendingSeek)}，已读取至 ${mediaTime(availableDuration)}`
-                : totalDuration === undefined
-                  ? `已读取至 ${mediaTime(availableDuration)}`
-                  : ""}
-            </p>
-            {pendingSeek !== null && (
-              <Button variant="ghost" size="xs" onClick={cancelSeek}>
-                取消定位
-              </Button>
-            )}
-          </div>
-        </>
-      )}
+          </Button>
+        )}
+        {live && !liveStarted && (
+          <Empty
+            className="live-startup"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <EmptyHeader>
+              <LoaderCircleIcon
+                className="player-loading-icon animate-spin"
+                aria-hidden="true"
+              />
+              <EmptyTitle>正在缓冲画面</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        )}
+        {!live && (!historyReady || pendingSeek !== null) && (
+          <Empty className="playback-startup" role="status">
+            <EmptyHeader>
+              <LoaderCircleIcon
+                className="player-loading-icon animate-spin"
+                aria-hidden="true"
+              />
+              <EmptyTitle>
+                {pendingSeek !== null ? "正在定位所选时间" : "正在缓冲录像"}
+              </EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </div>
+      {timeline}
       <div className="live-video-controls">
         <div className="live-controls-left">
-          {!live && (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label={paused ? "播放录像" : "暂停录像"}
-              title={paused ? "播放录像" : "暂停录像"}
-              onClick={() => {
-                const element = video.current
-                if (!element) return
-                if (element.paused) {
-                  void element.play().catch(() => {
-                    reportError("播放未能开始，请再次点击播放。", "play")
-                  })
-                } else element.pause()
-              }}
-            >
-              {paused ? (
-                <PlayIcon data-icon="inline-start" />
-              ) : (
-                <PauseIcon data-icon="inline-start" />
-              )}
-              <span className="control-label">{paused ? "播放" : "暂停"}</span>
+          {!live && pendingSeek !== null && (
+            <Button variant="ghost" size="sm" onClick={cancelSeek}>
+              取消定位
             </Button>
           )}
           {!live && (
@@ -564,7 +534,6 @@ export function HlsVideo({
               }}
             />
           )}
-          {playbackControls}
           {!live && clipSource && (
             <ClipExport
               source={clipSource}
@@ -627,12 +596,4 @@ function mediaTime(seconds: number) {
   return minutes >= 60
     ? `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${clock}`
     : clock
-}
-
-function parseMediaTime(value: string) {
-  const match = /^(\d{1,3}):([0-5]\d)(?::([0-5]\d))?$/.exec(value.trim())
-  if (!match) return undefined
-  return match[3] === undefined
-    ? Number(match[1]) * 60 + Number(match[2])
-    : Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
 }

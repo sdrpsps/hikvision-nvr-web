@@ -2,13 +2,21 @@
 
 import { useQueryStates } from "nuqs"
 import { playbackUrlParsers } from "@/lib/url-state"
-import { useCallback, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react"
 import { toast } from "sonner"
 import {
   ArchiveIcon,
   ChevronDownIcon,
   InfoIcon,
   MonitorIcon,
+  PlayIcon,
   RefreshCwIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -23,7 +31,6 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { RecordingDatePicker } from "@/components/recording-date-picker"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Switch } from "@/components/ui/switch"
 import {
   Popover,
   PopoverContent,
@@ -39,6 +46,7 @@ import {
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Slider } from "@/components/ui/slider"
 import { dateSchema, type Recordings } from "@/shared/contracts"
 import { useChannels, useDevice, useRecordings } from "@/hooks/use-api"
 import { useQueryErrorToast } from "@/hooks/use-query-error-toast"
@@ -75,7 +83,9 @@ function segmentEnd(iso: string, data: Recordings) {
 type RecordingSelection = {
   key: string
   selected: string
-  continuous: boolean
+  requestedTime?: { at: string; revision: number }
+  playbackAt?: string
+  active?: boolean
   automatic: string
   listOpen: boolean
 }
@@ -84,7 +94,6 @@ function emptySelection(key: string): RecordingSelection {
   return {
     key,
     selected: "",
-    continuous: false,
     automatic: "",
     listOpen: false,
   }
@@ -124,7 +133,28 @@ export function RecordingConsole() {
   const key = `${track}|${date}|${refresh}|${recordingsQuery.dataUpdatedAt}`
   const activeSelection =
     selection.key === key ? selection : emptySelection(key)
-  const { selected, continuous, automatic, listOpen } = activeSelection
+  const { selected, requestedTime, playbackAt, active, automatic, listOpen } =
+    activeSelection
+  const updatePlaybackTime = useCallback(
+    (at: string | undefined) => {
+      setSelection((old) =>
+        old.key === key && old.selected === selected && old.playbackAt !== at
+          ? { ...old, playbackAt: at }
+          : old
+      )
+    },
+    [key, selected, setSelection]
+  )
+  const updatePlaybackActivity = useCallback(
+    (active: boolean) => {
+      setSelection((old) =>
+        old.key === key && old.selected === selected && old.active !== active
+          ? { ...old, active }
+          : old
+      )
+    },
+    [key, selected, setSelection]
+  )
   function updateSelection(patch: Partial<Omit<RecordingSelection, "key">>) {
     setSelection((old) => ({
       ...(old.key === key ? old : emptySelection(key)),
@@ -149,14 +179,28 @@ export function RecordingConsole() {
   }
 
   const segment = data?.segments.find((segment) => segment.id === selected)
-  function selectSegment(id: string) {
-    updateSelection({ selected: id, automatic: "" })
+  function selectSegment(id: string, at?: string) {
+    const item = data?.segments.find((candidate) => candidate.id === id)
+    if (!item) return
+    setSelection((old) => {
+      const current = old.key === key ? old : emptySelection(key)
+      return {
+        ...current,
+        selected: id,
+        automatic: "",
+        requestedTime: {
+          at: at ?? item.startAt,
+          revision: (current.requestedTime?.revision ?? 0) + 1,
+        },
+        playbackAt: undefined,
+      }
+    })
   }
   function stopSequence() {
-    updateSelection({ automatic: "", continuous: false })
+    updateSelection({ automatic: "" })
   }
   function nextSegment() {
-    if (!continuous || !data || !segment) return
+    if (!data || !segment) return
     const next =
       data.segments[
         data.segments.findIndex((item) => item.id === segment.id) + 1
@@ -164,7 +208,6 @@ export function RecordingConsole() {
     if (!next) {
       updateSelection({
         automatic: "",
-        continuous: false,
       })
       toast.info("已播放到当日最后一个片段。")
       return
@@ -177,6 +220,11 @@ export function RecordingConsole() {
     updateSelection({
       automatic: next.id,
       selected: next.id,
+      requestedTime: {
+        at: next.startAt,
+        revision: (requestedTime?.revision ?? 0) + 1,
+      },
+      playbackAt: undefined,
     })
   }
   // This is a query snapshot. Future hours are neither covered nor missing yet.
@@ -199,6 +247,52 @@ export function RecordingConsole() {
       (item) =>
         Date.parse(item.startAt) < Math.min(Date.parse(item.endAt), observedEnd)
     ) ?? []
+
+  const distribution = data ? (
+    <section className="recording-distribution" aria-label="回放时间轴区域">
+      <RecordingTimeline
+        key={key}
+        data={data}
+        selected={selected}
+        requestedAt={requestedTime?.at}
+        playbackAt={playbackAt}
+        active={active}
+        zoomControls={
+          <ToggleGroup
+            aria-label="时间轴缩放"
+            value={[zoom]}
+            onValueChange={(values) => {
+              if (values[0] === "1" || values[0] === "2" || values[0] === "4")
+                void setUrlState({ track, date, zoom: values[0] })
+            }}
+            variant="outline"
+            size="sm"
+            spacing={0}
+          >
+            <ToggleGroupItem value="1">全天</ToggleGroupItem>
+            <ToggleGroupItem value="2">2 倍</ToggleGroupItem>
+            <ToggleGroupItem value="4">4 倍</ToggleGroupItem>
+          </ToggleGroup>
+        }
+        onSelect={selectSegment}
+        zoom={Number(zoom)}
+      />
+      <div className="coverage-summary">
+        <span>{data.segments.length} 个录像片段</span>
+        <span>
+          覆盖 <strong>{duration(coverage)}</strong>
+        </span>
+        {gaps.length > 0 && (
+          <span>
+            缺口 <strong>{gaps.length} 处</strong>
+          </span>
+        )}
+        {observedEnd < Date.parse(data.range.endAt) && (
+          <span>截至本次查询</span>
+        )}
+      </div>
+    </section>
+  ) : null
 
   return (
     <div className="console-shell playback-shell">
@@ -328,19 +422,16 @@ export function RecordingConsole() {
                 <div className="playback-focus">
                   {segment ? (
                     <>
-                      <div className="selected-segment" role="status">
-                        <span>已选片段</span>
-                        <strong>
-                          {clock(segment.startAt, data.timeZone)} —{" "}
-                          {segmentEnd(segment.endAt, data)}
-                        </strong>
-                      </div>
                       <PreviewPlayer
                         key={`${key}|${segment.id}`}
                         track={track}
                         date={date}
                         segmentId={segment.id}
                         timeZone={data.timeZone}
+                        requestedTime={requestedTime}
+                        onPlaybackTimeChange={updatePlaybackTime}
+                        onActivityChange={updatePlaybackActivity}
+                        timeline={distribution}
                         channelName={
                           resources?.channels.find(
                             (channel) => channel.id === track
@@ -349,101 +440,43 @@ export function RecordingConsole() {
                         autoStart={automatic === segment.id}
                         initialPreferences={preferences}
                         onPreferencesChange={updatePreferences}
-                        onPlaybackEnded={continuous ? nextSegment : undefined}
+                        onPlaybackEnded={nextSegment}
                         onStop={stopSequence}
-                        playbackControls={
-                          <FieldGroup className="continuous-control">
-                            <Field orientation="horizontal">
-                              <Switch
-                                id="continuous-playback"
-                                aria-label="连续播放"
-                                checked={continuous}
-                                onCheckedChange={(checked) => {
-                                  updateSelection({
-                                    continuous: checked,
-                                    automatic: checked ? automatic : "",
-                                  })
-                                }}
-                              />
-                              <FieldLabel htmlFor="continuous-playback">
-                                连续播放
-                              </FieldLabel>
-                            </Field>
-                          </FieldGroup>
-                        }
                       />
                     </>
                   ) : (
-                    <Empty className="playback-selection-empty">
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <ArchiveIcon />
-                        </EmptyMedia>
-                        <EmptyTitle>选择录像片段</EmptyTitle>
-                        <EmptyDescription>
-                          在下方选择要查看的录像。
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
+                    <div className="playback-player playback-selection">
+                      <Empty className="playback-selection-empty">
+                        <Button
+                          className="playback-center-button"
+                          size="icon-lg"
+                          aria-label="播放"
+                          title="播放"
+                          onClick={() => selectSegment(data.segments[0].id)}
+                        >
+                          <PlayIcon />
+                        </Button>
+                      </Empty>
+                      {distribution}
+                    </div>
                   )}
                 </div>
               ) : (
-                <Empty className="py-14">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <ArchiveIcon />
-                    </EmptyMedia>
-                    <EmptyTitle>这一天没有检索到录像</EmptyTitle>
-                    <EmptyDescription>试试其他日期或摄像头。</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
+                <div className="playback-player playback-selection">
+                  <Empty className="playback-selection-empty">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ArchiveIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>这一天没有检索到录像</EmptyTitle>
+                      <EmptyDescription>
+                        试试其他日期或摄像头。
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                  {distribution}
+                </div>
               )}
-              <section className="recording-distribution" aria-label="当日录像">
-                <div className="timeline-toolbar">
-                  <div className="distribution-heading">
-                    <h2>当日录像</h2>
-                  </div>
-                  <ToggleGroup
-                    aria-label="时间轴缩放"
-                    value={[zoom]}
-                    onValueChange={(values) => {
-                      if (
-                        values[0] === "1" ||
-                        values[0] === "2" ||
-                        values[0] === "4"
-                      )
-                        void setUrlState({ track, date, zoom: values[0] })
-                    }}
-                    variant="outline"
-                    size="sm"
-                    spacing={0}
-                  >
-                    <ToggleGroupItem value="1">全天</ToggleGroupItem>
-                    <ToggleGroupItem value="2">2 倍</ToggleGroupItem>
-                    <ToggleGroupItem value="4">4 倍</ToggleGroupItem>
-                  </ToggleGroup>
-                </div>
-                <RecordingTimeline
-                  data={data}
-                  selected={selected}
-                  onSelect={selectSegment}
-                  zoom={Number(zoom)}
-                />
-                <div className="coverage-summary">
-                  <span>{data.segments.length} 个录像片段</span>
-                  <span>
-                    覆盖 <strong>{duration(coverage)}</strong>
-                  </span>
-                  {gaps.length > 0 && (
-                    <span>
-                      缺口 <strong>{gaps.length} 处</strong>
-                    </span>
-                  )}
-                  {observedEnd < Date.parse(data.range.endAt) && (
-                    <span>截至本次查询</span>
-                  )}
-                </div>
-              </section>
               {data.segments.length > 0 && (
                 <section className="segment-list" aria-label="录像片段列表">
                   <Button
@@ -592,83 +625,238 @@ function DeviceDetailsContent({
 function RecordingTimeline({
   data,
   selected,
+  requestedAt,
+  playbackAt,
+  active,
   onSelect,
   zoom,
+  zoomControls,
 }: {
   data: Recordings
   selected: string
-  onSelect: (id: string) => void
+  requestedAt?: string
+  playbackAt?: string
+  active?: boolean
+  onSelect: (id: string, at?: string) => void
   zoom: number
+  zoomControls?: ReactNode
 }) {
+  const [scrub, setScrub] = useState<number>()
+  const pointerGesture = useRef<{
+    id: number
+    seconds: number
+    committed: boolean
+    cancelled: boolean
+    controller: AbortController
+  } | null>(null)
+  useEffect(() => () => pointerGesture.current?.controller.abort(), [])
   const start = Date.parse(data.range.startAt),
     total = Date.parse(data.range.endAt) - start
+  const max = Math.max(0, total / 1000 - 1)
   const ticks = Array.from(
     { length: Math.ceil(total / 3600000) + 1 },
     (_, index) => Math.min(index * 3600000, total)
   )
+  const currentAt = playbackAt ?? requestedAt
+  const position = currentAt ? (Date.parse(currentAt) - start) / 1000 : 0
+  const value = Math.max(0, Math.min(max, scrub ?? position))
+  const shownAt =
+    scrub !== undefined
+      ? new Date(start + value * 1000).toISOString()
+      : (currentAt ?? data.range.startAt)
+  const shownOutsideDay =
+    Date.parse(shownAt) < start || Date.parse(shownAt) >= start + total
+  const timeText = shownOutsideDay
+    ? `${new Intl.DateTimeFormat("zh-CN", {
+        timeZone: data.timeZone,
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(shownAt))} ${clock(shownAt, data.timeZone)}`
+    : clock(shownAt, data.timeZone)
+  function commitTime(seconds: number) {
+    setScrub(undefined)
+    const at = start + Math.max(0, Math.min(max, seconds)) * 1000
+    const segment = data.segments.find(
+      (segment) =>
+        Date.parse(segment.startAt) <= at && at < Date.parse(segment.endAt)
+    )
+    if (!segment) {
+      toast.info("所选时间没有录像，请选择有录像的时段。")
+      return
+    }
+    onSelect(segment.id, new Date(at).toISOString())
+  }
+  function cancelScrub() {
+    const gesture = pointerGesture.current
+    if (gesture) {
+      gesture.cancelled = true
+      gesture.controller.abort()
+    }
+    setScrub(undefined)
+  }
+  function beginScrub(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !data.segments.length) return
+    const targetWindow = event.currentTarget.ownerDocument.defaultView
+    if (!targetWindow) return
+    pointerGesture.current?.controller.abort()
+    const gesture = {
+      id: event.pointerId,
+      seconds: value,
+      committed: false,
+      cancelled: false,
+      controller: new AbortController(),
+    }
+    pointerGesture.current = gesture
+    setScrub(value)
+    // Base UI commits changed values on document pointerup. The window handler
+    // runs afterwards and also covers a press/release at the unchanged value.
+    targetWindow.addEventListener(
+      "pointerup",
+      (released) => {
+        if (released.pointerId !== gesture.id) return
+        gesture.controller.abort()
+        if (!gesture.cancelled && !gesture.committed)
+          commitTime(gesture.seconds)
+        if (pointerGesture.current === gesture) pointerGesture.current = null
+      },
+      { signal: gesture.controller.signal }
+    )
+    targetWindow.addEventListener(
+      "pointercancel",
+      (cancelled) => {
+        if (cancelled.pointerId === gesture.id) cancelScrub()
+      },
+      { signal: gesture.controller.signal }
+    )
+  }
   return (
-    <ScrollArea
-      className="timeline-scroll-area"
-      scrollbars="horizontal"
-      contentProps={{ style: { minWidth: "fit-content" } }}
-      viewportProps={{
-        className: "timeline-scroll",
-        tabIndex: 0,
-        role: "region",
-        "aria-label": "全天录像时间轴，可横向滚动",
-      }}
-    >
-      <div
-        className="timeline-chart"
-        style={{ minWidth: `${Math.max(640, 760 * zoom)}px` }}
-      >
-        <div className="timeline-ticks">
-          {ticks.map((offset, index) => (
-            <span key={offset} style={{ left: `${(offset / total) * 100}%` }}>
-              {index % 2 === 0 || offset === total
-                ? offset === total
-                  ? "24:00"
-                  : clock(
-                      new Date(start + offset).toISOString(),
-                      data.timeZone
-                    ).slice(0, 5)
-                : ""}
+    <>
+      <div className="timeline-toolbar">
+        <div className="distribution-heading">
+          <div className="timeline-current-time">
+            <span>
+              {scrub !== undefined
+                ? "选择时间"
+                : playbackAt
+                  ? "回放时间"
+                  : active && requestedAt
+                    ? "正在定位"
+                    : requestedAt
+                      ? "回放时间"
+                      : "选择时间"}
             </span>
-          ))}
+            <time dateTime={shownAt} aria-label="当前回放时间">
+              {timeText}
+            </time>
+          </div>
         </div>
-        <div className="timeline-track">
-          {ticks.map((offset) => (
-            <span
-              key={offset}
-              className="timeline-gridline"
-              style={{ left: `${(offset / total) * 100}%` }}
-            />
-          ))}
-          {data.segments.map((segment, index) => {
-            const a = Math.max(start, Date.parse(segment.startAt)),
-              b = Math.min(start + total, Date.parse(segment.endAt))
-            return (
-              <Button
-                type="button"
-                variant="recording"
-                key={segment.id}
-                className={cn(
-                  "timeline-segment",
-                  selected === segment.id && "is-selected"
-                )}
-                style={{
-                  left: `${((a - start) / total) * 100}%`,
-                  width: `${((b - a) / total) * 100}%`,
-                }}
-                aria-label={`片段 ${index + 1}，${clock(segment.startAt, data.timeZone)} 至 ${segmentEnd(segment.endAt, data)}`}
-                aria-pressed={selected === segment.id}
-                title={`${clock(segment.startAt, data.timeZone)} — ${segmentEnd(segment.endAt, data)}`}
-                onClick={() => onSelect(segment.id)}
-              />
-            )
-          })}
-        </div>
+        {zoomControls}
       </div>
-    </ScrollArea>
+      <ScrollArea
+        className="timeline-scroll-area"
+        scrollbars="horizontal"
+        contentProps={{ style: { minWidth: "fit-content" } }}
+        viewportProps={{
+          className: "timeline-scroll",
+          tabIndex: 0,
+          role: "region",
+          "aria-label": "全天录像时间轴，可横向滚动",
+        }}
+      >
+        <div
+          className="timeline-chart"
+          style={{ minWidth: `${Math.max(640, 760 * zoom)}px` }}
+        >
+          <div className="timeline-ticks">
+            {ticks.map((offset, index) => (
+              <span key={offset} style={{ left: `${(offset / total) * 100}%` }}>
+                {index % 2 === 0 || offset === total
+                  ? offset === total
+                    ? "24:00"
+                    : clock(
+                        new Date(start + offset).toISOString(),
+                        data.timeZone
+                      ).slice(0, 5)
+                  : ""}
+              </span>
+            ))}
+          </div>
+          <div className="timeline-track">
+            {ticks.map((offset) => (
+              <span
+                key={offset}
+                className="timeline-gridline"
+                style={{ left: `${(offset / total) * 100}%` }}
+              />
+            ))}
+            {data.segments.map((segment, index) => {
+              const a = Math.max(start, Date.parse(segment.startAt)),
+                b = Math.min(start + total, Date.parse(segment.endAt))
+              return (
+                <span
+                  key={segment.id}
+                  className={cn(
+                    "timeline-segment",
+                    selected === segment.id && "is-selected"
+                  )}
+                  style={{
+                    left: `${((a - start) / total) * 100}%`,
+                    width: `${((b - a) / total) * 100}%`,
+                  }}
+                  aria-label={`片段 ${index + 1}，${clock(segment.startAt, data.timeZone)} 至 ${segmentEnd(segment.endAt, data)}`}
+                  title={`${clock(segment.startAt, data.timeZone)} — ${segmentEnd(segment.endAt, data)}`}
+                />
+              )
+            })}
+            <Slider
+              className="recording-timeline-slider"
+              aria-label="回放时间轴"
+              getAriaValueText={(_formatted, seconds) =>
+                clock(
+                  new Date(start + seconds * 1000).toISOString(),
+                  data.timeZone
+                )
+              }
+              value={[value]}
+              min={0}
+              max={max}
+              step={1}
+              disabled={!data.segments.length}
+              onPointerDownCapture={beginScrub}
+              onPointerCancelCapture={cancelScrub}
+              onTouchCancelCapture={cancelScrub}
+              onValueChange={(next) => {
+                const seconds = Array.isArray(next) ? next[0] : next
+                if (Number.isFinite(seconds)) {
+                  const gesture = pointerGesture.current
+                  if (gesture && !gesture.cancelled) gesture.seconds = seconds
+                  setScrub(seconds)
+                }
+              }}
+              onValueCommitted={(next, details) => {
+                const seconds = Array.isArray(next) ? next[0] : next
+                if (!Number.isFinite(seconds)) return
+                const pointerCommit =
+                  details.reason === "drag" || details.reason === "track-press"
+                const gesture = pointerGesture.current
+                if (
+                  details.event.type === "pointercancel" ||
+                  details.event.type === "touchcancel" ||
+                  (pointerCommit && gesture?.cancelled)
+                ) {
+                  setScrub(undefined)
+                  return
+                }
+                if (pointerCommit && gesture) {
+                  if (gesture.committed) return
+                  gesture.committed = true
+                }
+                commitTime(seconds)
+              }}
+            />
+          </div>
+        </div>
+      </ScrollArea>
+    </>
   )
 }

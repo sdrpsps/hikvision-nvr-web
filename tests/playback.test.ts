@@ -1,14 +1,16 @@
 import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { PlaybackSessions } from "../server/playback"
 import {
   playbackRemuxArguments,
   type RecordingFragments,
 } from "../server/playback-remux"
-import { splitFragmentedMp4 } from "../server/mp4"
+import { mp4Boxes, splitFragmentedMp4 } from "../server/mp4"
 import { readNvrConfig } from "../server/config"
 import { createApp } from "../server/app"
 import { NvrService } from "../server/recordings"
@@ -30,6 +32,74 @@ const source: RawSegment = {
 const media = splitFragmentedMp4(
   readFileSync(new URL("../fixtures/synthetic-preview.mp4", import.meta.url))
 )
+function copiedPlaybackFragments(name: string, splitWithinGop = false) {
+  const args = playbackRemuxArguments()
+  // Use the product's complete output options and original encoded samples.
+  args.splice(
+    args.indexOf("-i") - 2,
+    4,
+    "-stream_loop",
+    "2",
+    "-i",
+    fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
+  )
+  if (splitWithinGop)
+    args[args.length - 1] = args
+      .at(-1)!
+      .replace(":select=v]", ":frag_duration=2000000:select=v]")
+  const result = spawnSync(process.env.FFMPEG_PATH || "ffmpeg", args, {
+    maxBuffer: 8 * 1024 * 1024,
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
+  })
+  if (result.error || result.status !== 0)
+    throw new Error("Synthetic playback stream-copy fragmentation failed")
+  const data = result.stdout,
+    whole = splitFragmentedMp4(data),
+    boxes = mp4Boxes(data)
+  return boxes.flatMap((box, index) => {
+    if (box.type !== "moof") return []
+    const mdat = boxes[index + 1]
+    if (mdat?.type !== "mdat") throw new Error("Incomplete playback fixture")
+    return [
+      splitFragmentedMp4(
+        Buffer.concat([whole.init, data.subarray(box.start, mdat.end)])
+      ),
+    ]
+  })
+}
+function decodeFragment(fragment: typeof media) {
+  const result = spawnSync(
+    process.env.FFMPEG_PATH || "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-xerror",
+      "-i",
+      "pipe:0",
+      "-map",
+      "0:v:0",
+      "-f",
+      "null",
+      "-",
+      "-progress",
+      "pipe:1",
+    ],
+    {
+      input: Buffer.concat([fragment.init, fragment.media]),
+      maxBuffer: 1024 * 1024,
+      timeout: 5000,
+    }
+  )
+  if (result.error) throw result.error
+  return {
+    exitCode: result.status,
+    frames: Number(
+      [...result.stdout.toString().matchAll(/^frame=(\d+)$/gm)].at(-1)?.[1] ?? 0
+    ),
+    errors: result.stderr.toString(),
+  }
+}
 const stores: PlaybackSessions[] = [],
   roots: string[] = []
 async function setup(
@@ -64,6 +134,28 @@ afterEach(async () => {
 })
 
 describe("full recording playback", () => {
+  it("returns only the resolved full-file time range and selected start offset in the session", async () => {
+    const { sessions } = await setup(async function* () {
+      yield media
+    })
+    const resolved = {
+      ...source,
+      fileRange: { startAt: "2026-10-16T12:49:33.000Z", endAt: source.endAt },
+      startOffsetSeconds: 11427,
+    }
+    const session = await sessions.create(
+      config,
+      async () => resolved,
+      signal()
+    )
+    expect(session.fileRange).toEqual(resolved.fileRange)
+    expect(session.startOffsetSeconds).toBe(11427)
+    expect(JSON.stringify(session)).not.toMatch(
+      /playbackURI|rtsp:|synthetic|test-secret/
+    )
+    await sessions.delete(session.id)
+  })
+
   it("cleans orphaned media on the next initialization while preserving an active owner", async () => {
     const { sessions, root } = await setup(async function* () {
       yield media
@@ -94,6 +186,113 @@ describe("full recording playback", () => {
     ])
     expect(args.at(-1)).toContain("pipe:3")
     expect(args.join(" ")).not.toMatch(/libx26| -vf | -filter/)
+  })
+  it.each(["synthetic-preview.mp4", "synthetic-preview-hevc.mp4"])(
+    "can decode every copied %s playback fragment when opened without previous fragments",
+    (name) => {
+      const fragments = copiedPlaybackFragments(name)
+      expect(fragments.length).toBeGreaterThan(1)
+      for (const fragment of fragments) {
+        expect(fragment.startsWithKeyframe).toBe(true)
+        const decoded = decodeFragment(fragment)
+        expect(decoded.exitCode).toBe(0)
+        expect(decoded.errors).toBe("")
+        expect(decoded.frames).toBe(fragment.sampleCount)
+      }
+    }
+  )
+  it("reproduces a zero-frame initial seek when a HEVC GOP is split at two seconds", () => {
+    const fragments = copiedPlaybackFragments(
+      "synthetic-preview-hevc.mp4",
+      true
+    )
+    const dependent = fragments.find((fragment) => !fragment.startsWithKeyframe)
+    expect(dependent).toBeDefined()
+    const decoded = decodeFragment(dependent!)
+    expect(decoded.frames).toBe(0)
+    expect(decoded.errors).not.toBe("")
+  })
+  it("keeps HEVC B-frame HLS positions aligned with encoded time instead of accumulating overlapping presentation spans", async () => {
+    const copied = spawnSync(
+      process.env.FFMPEG_PATH || "ffmpeg",
+      [
+        "-nostdin",
+        "-v",
+        "error",
+        "-i",
+        fileURLToPath(
+          new URL("../fixtures/synthetic-preview-hevc.mp4", import.meta.url)
+        ),
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "copy",
+        "-an",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-movflags",
+        "+frag_keyframe+empty_moov+default_base_moof",
+        "-frag_duration",
+        "500000",
+        "-f",
+        "mp4",
+        "pipe:1",
+      ],
+      { maxBuffer: 8 * 1024 * 1024, timeout: 5000 }
+    )
+    if (copied.error || copied.status !== 0)
+      throw new Error("Synthetic HEVC stream-copy fragmentation failed")
+    const whole = splitFragmentedMp4(copied.stdout)
+    const boxes = mp4Boxes(copied.stdout)
+    const fragments = boxes.flatMap((box, index) => {
+      if (box.type !== "moof") return []
+      const mdat = boxes[index + 1]
+      if (mdat?.type !== "mdat") throw new Error("Incomplete HEVC fixture")
+      return [
+        splitFragmentedMp4(
+          Buffer.concat([
+            whole.init,
+            copied.stdout.subarray(box.start, mdat.end),
+          ])
+        ),
+      ]
+    })
+    // Prove this encoded fixture exercises the old accumulated-clock error.
+    expect(fragments.length).toBeGreaterThan(3)
+    expect(
+      fragments.reduce((sum, part) => sum + part.durationSeconds, 0)
+    ).toBeGreaterThan(whole.durationSeconds + 0.05)
+    const { sessions } = await setup(async function* () {
+      yield* fragments
+    })
+    const session = await sessions.create(config, resolve, signal())
+    await vi.waitFor(() =>
+      expect(sessions.status(session.id).complete).toBe(true)
+    )
+    const entries = [
+      ...sessions
+        .playlist(session.id)
+        .matchAll(/#EXTINF:([\d.]+),\n(\d+\.m4s)/g),
+    ]
+    expect(entries).toHaveLength(fragments.length)
+    let playlistPosition = 0
+    for (const entry of entries) {
+      const encoded = splitFragmentedMp4(
+        Buffer.concat([whole.init, await sessions.asset(session.id, entry[2])])
+      )
+      // A seek at a playlist boundary must load that same encoded instant.
+      expect(playlistPosition).toBeCloseTo(
+        encoded.decodeStartSeconds - whole.decodeStartSeconds,
+        5
+      )
+      playlistPosition += Number(entry[1])
+    }
+    expect(playlistPosition).toBeCloseTo(whole.decodeDurationSeconds, 5)
+    expect(sessions.status(session.id).durationSeconds).toBeCloseTo(
+      whole.decodeDurationSeconds,
+      6
+    )
+    await sessions.delete(session.id)
   })
   it("starts before EOF, preserves every fragment beyond 30 seconds, and securely releases files", async () => {
     let advance!: () => void

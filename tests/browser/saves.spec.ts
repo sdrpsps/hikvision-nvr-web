@@ -225,6 +225,12 @@ async function syntheticSource(
 }
 
 async function queries(page: Page, fullDuration = 3) {
+  const fileRange = {
+    startAt: "2026-10-16T16:00:00Z",
+    endAt: new Date(
+      Date.parse("2026-10-16T16:00:00Z") + fullDuration * 1000
+    ).toISOString(),
+  }
   await page.route("**/api/channels", (route) =>
     route.fulfill({
       json: {
@@ -251,8 +257,7 @@ async function queries(page: Page, fullDuration = 3) {
         segments: [
           {
             id: segmentId,
-            startAt: "2026-10-16T16:00:00Z",
-            endAt: "2026-10-16T17:00:00Z",
+            ...fileRange,
           },
         ],
         coverage: [],
@@ -271,6 +276,8 @@ async function queries(page: Page, fullDuration = 3) {
         status: 201,
         json: {
           id,
+          fileRange,
+          startOffsetSeconds: 0,
           playlistUrl: `/api/streams/${id}/index.m3u8`,
           durationSeconds: fullDuration,
           totalDurationSeconds: fullDuration,
@@ -856,7 +863,6 @@ test("history A/B validation and short original-speed export ignore playback spe
   await queries(page)
   await opfsPicker(page)
   await page.goto("/playback")
-  await page.locator(".timeline-segment").first().click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "播放倍速", exact: true })
@@ -940,7 +946,6 @@ test("fractional file end can be marked, extended and submitted without truncati
     }
   })
   await page.goto("/playback")
-  await page.locator(".timeline-segment").first().click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await expect
     .poll(() =>
@@ -1079,7 +1084,6 @@ test("download activity remains visible while its dialog is closed and navigatio
   await opfsPicker(page)
   try {
     await page.goto("/playback")
-    await page.locator(".timeline-segment").first().click()
     await page.getByRole("button", { name: "播放", exact: true }).click()
     const trigger = page.getByRole("button", { name: "下载片段", exact: true })
     await trigger.click()
@@ -1259,7 +1263,6 @@ test("save triggers align with existing controls and dialogs fit a 390px viewpor
   await expect.poll(() => source.open.size).toBe(0)
 
   await page.getByRole("link", { name: "录像回放", exact: true }).click()
-  await page.locator(".timeline-segment").first().click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
   const download = page.getByRole("button", { name: "下载片段", exact: true })
   await expect(download).toHaveClass(/player-control-button/)
@@ -1371,7 +1374,6 @@ test("fullscreen keeps the recording indicator visible and contains task and cli
   await expect.poll(() => source.open.size).toBe(0)
 
   await page.getByRole("link", { name: "录像回放", exact: true }).click()
-  await page.locator(".timeline-segment").first().click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await page.getByRole("button", { name: "全屏", exact: true }).click()
   await expect
@@ -1430,7 +1432,6 @@ test("four concurrent saves reject a fifth task and stop independently before cl
 
   // A history export uses the same activity limit as the live recordings.
   await page.getByRole("link", { name: "录像回放", exact: true }).click()
-  await page.locator(".timeline-segment").first().click()
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await page.getByRole("button", { name: "下载片段", exact: true }).click()
   const clip = page.getByRole("dialog", {

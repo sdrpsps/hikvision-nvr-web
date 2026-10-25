@@ -30,6 +30,8 @@ type Session = {
   segments: { duration: number; bytes: number }[]
   bytes: number
   codec?: "h264" | "hevc"
+  fileRange?: RawSegment["fileRange"]
+  startOffsetSeconds?: number
   estimatedDurationSeconds?: number
   complete: boolean
   error?: AppError
@@ -142,6 +144,8 @@ export class PlaybackSessions {
       await this.initialize()
       const segment = await resolve()
       // Only the service can establish whether search boundaries clipped a file.
+      session.fileRange = segment.fileRange
+      session.startOffsetSeconds = segment.startOffsetSeconds
       const estimatedDurationSeconds = segment.estimatedDurationSeconds
       if (
         estimatedDurationSeconds !== undefined &&
@@ -221,7 +225,9 @@ export class PlaybackSessions {
           )
         await save(`${session.segments.length}.m4s`, media.media)
         session.segments.push({
-          duration: media.durationSeconds,
+          // Reordered B frames can overlap adjacent presentation spans. HLS
+          // positions must follow the contiguous decode timeline, as live does.
+          duration: media.decodeDurationSeconds,
           bytes: media.media.length,
         })
         if (session.segments.length === 1) {
@@ -261,6 +267,10 @@ export class PlaybackSessions {
         )
       return {
         id,
+        ...(session.fileRange && { fileRange: session.fileRange }),
+        ...(session.startOffsetSeconds !== undefined && {
+          startOffsetSeconds: session.startOffsetSeconds,
+        }),
         playlistUrl: `/api/streams/${id}/index.m3u8`,
         durationSeconds: this.duration(session),
         ...(session.estimatedDurationSeconds !== undefined && {

@@ -57,7 +57,12 @@ describe("full-file duration estimates", () => {
     const { query, resolved } = await resolveFromDays(interior, {
       [date]: [interior],
     })
-    expect(resolved).toEqual({ ...interior, estimatedDurationSeconds: 282 })
+    expect(resolved).toMatchObject({
+      ...interior,
+      estimatedDurationSeconds: 282,
+      fileRange: { startAt: interior.startAt, endAt: interior.endAt },
+      startOffsetSeconds: 0,
+    })
     expect(query.mock.calls.map((call) => call[1])).toEqual([date])
   })
 
@@ -66,7 +71,15 @@ describe("full-file duration estimates", () => {
       [date]: [source],
       "2026-12-31": [previous],
     })
-    expect(resolved).toEqual({ ...source, estimatedDurationSeconds: 7224 })
+    expect(resolved).toMatchObject({
+      ...source,
+      estimatedDurationSeconds: 7224,
+      fileRange: {
+        startAt: new Date(previous.startAt).toISOString(),
+        endAt: new Date(source.endAt).toISOString(),
+      },
+      startOffsetSeconds: 6882,
+    })
     expect(query.mock.calls.map((call) => call[1])).toEqual([
       date,
       "2026-12-31",
@@ -75,6 +88,38 @@ describe("full-file duration estimates", () => {
     expect(JSON.stringify(result)).not.toMatch(
       /playbackURI|synthetic-file|size=123|rtsp:/
     )
+  })
+
+  it("resolves the reported midnight case with the complete prior-day range and start offset", async () => {
+    const selected = {
+      ...source,
+      startAt: "2026-10-24T16:00:00Z",
+      endAt: "2026-10-24T16:04:06Z",
+    }
+    const before = {
+      ...previous,
+      startAt: "2026-10-24T12:49:33Z",
+      endAt: selected.startAt,
+    }
+    const { resolved, result } = await resolveFromDays(
+      selected,
+      {
+        "2026-10-25": [selected],
+        "2026-10-24": [before],
+      },
+      "2026-10-25"
+    )
+    expect(resolved).toMatchObject({
+      startAt: selected.startAt,
+      fileRange: {
+        startAt: "2026-10-24T12:49:33.000Z",
+        endAt: "2026-10-24T16:04:06.000Z",
+      },
+      estimatedDurationSeconds: 11673,
+      startOffsetSeconds: 11427,
+    })
+    expect(result.segments[0].startAt).toBe(selected.startAt)
+    expect(resolved.playbackURI).toBe(selected.playbackURI)
   })
 
   it("queries only the next day for a file clipped at the end of the selected day", async () => {
@@ -92,7 +137,15 @@ describe("full-file duration estimates", () => {
       [date]: [ending],
       "2027-01-02": [next],
     })
-    expect(resolved).toEqual({ ...ending, estimatedDurationSeconds: 3900 })
+    expect(resolved).toMatchObject({
+      ...ending,
+      estimatedDurationSeconds: 3900,
+      fileRange: {
+        startAt: new Date(ending.startAt).toISOString(),
+        endAt: new Date(next.endAt).toISOString(),
+      },
+      startOffsetSeconds: 0,
+    })
     expect(query.mock.calls.map((call) => call[1])).toEqual([
       date,
       "2027-01-02",
@@ -125,7 +178,15 @@ describe("full-file duration estimates", () => {
       "2026-03-08",
       "America/New_York"
     )
-    expect(resolved).toEqual({ ...selected, estimatedDurationSeconds: 90000 })
+    expect(resolved).toMatchObject({
+      ...selected,
+      estimatedDurationSeconds: 90000,
+      fileRange: {
+        startAt: new Date(before.startAt).toISOString(),
+        endAt: new Date(after.endAt).toISOString(),
+      },
+      startOffsetSeconds: 3600,
+    })
     expect(query.mock.calls.map((call) => call[1])).toEqual([
       "2026-03-08",
       "2026-03-07",
@@ -139,7 +200,15 @@ describe("full-file duration estimates", () => {
       [date]: [source],
       "2026-12-31": [previous, overlapping],
     })
-    expect(resolved).toEqual({ ...source, estimatedDurationSeconds: 7224 })
+    expect(resolved).toMatchObject({
+      ...source,
+      estimatedDurationSeconds: 7224,
+      fileRange: {
+        startAt: new Date(previous.startAt).toISOString(),
+        endAt: new Date(source.endAt).toISOString(),
+      },
+      startOffsetSeconds: 6882,
+    })
   })
 
   it("skips optional searches after the original resolve has already taken five seconds", async () => {
@@ -201,6 +270,8 @@ describe("full-file duration estimates", () => {
       await vi.advanceTimersByTimeAsync(1500)
       const resolved = await pending
       expect(resolved).not.toHaveProperty("estimatedDurationSeconds")
+      expect(resolved).not.toHaveProperty("fileRange")
+      expect(resolved).not.toHaveProperty("startOffsetSeconds")
       expect(resolved.playbackURI).toBe(
         parseSearch(xml()).segments[0].playbackURI
       )
@@ -276,6 +347,8 @@ describe("full-file duration estimates", () => {
       })
       expect(resolved).toEqual(source)
       expect(resolved).not.toHaveProperty("estimatedDurationSeconds")
+      expect(resolved).not.toHaveProperty("fileRange")
+      expect(resolved).not.toHaveProperty("startOffsetSeconds")
     }
   )
 

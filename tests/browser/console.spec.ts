@@ -25,6 +25,11 @@ for (const mobile of [false, true]) {
   }) => {
     if (mobile) await page.setViewportSize({ width: 375, height: 812 })
     const requests: string[] = []
+    let playbackRequests = 0
+    // Query interactions keep media preparation pending without contacting NVR.
+    await page.route("**/api/streams/playback", () => {
+      playbackRequests++
+    })
     let finishPrevious: (() => void) | undefined
     await page.route("**/api/device", (route) =>
       route.fulfill({ json: { model: "TEST-NVR", firmware: "TEST" } })
@@ -93,13 +98,16 @@ for (const mobile of [false, true]) {
     await listItem.focus()
     await page.keyboard.press("Enter")
     await expect(listItem).toHaveAttribute("aria-pressed", "true")
-    const bar = page.getByRole("button", {
-      name: "片段 1，00:00:00 至 01:00:00",
-      exact: true,
-    })
-    await bar.click()
-    await expect(page.getByText("已选片段")).toBeVisible()
-    await expect(bar).toHaveAttribute("aria-pressed", "true")
+    await expect.poll(() => playbackRequests).toBe(1)
+    await expect(page.getByRole("button", { name: "取消准备" })).toBeVisible()
+    const bar = page.locator(".timeline-segment").first()
+    await expect(bar).toHaveClass(/is-selected/)
+    await expect(
+      page.getByRole("slider", { name: "回放时间轴", exact: true })
+    ).toBeVisible()
+    await expect(
+      page.getByLabel("当前回放时间", { exact: true })
+    ).toContainText("00:00:00")
     const oldWidth = await page
       .locator(".timeline-chart")
       .evaluate((el) => el.getBoundingClientRect().width)
@@ -313,6 +321,7 @@ test("Beijing labels and day end ignore the browser time zone and old time notic
   })
   try {
     const page = await context.newPage()
+    await page.route("**/api/streams/playback", () => {})
     const requestedDates: string[] = []
     await page.route("**/api/device", (route) =>
       route.fulfill({ json: { model: "TEST", firmware: "TEST" } })
@@ -350,14 +359,18 @@ test("Beijing labels and day end ignore the browser time zone and old time notic
     )
     await expect(page.getByText("录像时间需要核对")).toHaveCount(0)
     await expect(page.locator("main").getByRole("alert")).toHaveCount(0)
-    const bar = page.getByRole("button", {
-      name: "片段 1，00:00:00 至 24:00:00",
-      exact: true,
-    })
+    const bar = page.locator(".timeline-segment").first()
     await expect(bar).toBeVisible()
-    await bar.click()
-    await expect(page.locator(".selected-segment strong")).toHaveText(
-      "00:00:00 — 24:00:00"
+    await expect(bar).toHaveAttribute("title", "00:00:00 — 24:00:00")
+    await page.getByRole("button", { name: "片段列表", exact: true }).click()
+    await page
+      .getByRole("button", {
+        name: "选择片段 1，00:00:00 至 24:00:00",
+        exact: true,
+      })
+      .click()
+    await expect(page.getByLabel("当前回放时间", { exact: true })).toHaveText(
+      "00:00:00"
     )
     await expect(page.locator(".coverage-summary")).toContainText(
       "24 小时 0 分"
@@ -413,8 +426,9 @@ test("real LAN acceptance: track 101 / 2026-10-17", async ({ page }) => {
   await expect(page.locator(".segment-list li")).toHaveCount(
     recordings.segments.length
   )
-  await page.locator(".timeline-segment").first().click()
-  await expect(page.getByText("已选片段")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "播放", exact: true })
+  ).toBeVisible()
   expect(body).not.toMatch(/rtsp:|playbackURI|serialNumber|Authorization/)
   expect(errors).toEqual([])
 })

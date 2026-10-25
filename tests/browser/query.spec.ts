@@ -274,8 +274,13 @@ test("refreshing recordings releases the current playback and requests a new sna
   )
   await page.route("**/api/recordings?**", (route) => {
     queryRequests++
+    const snapshot = recordings(undefined, queryRequests === 1 ? 1 : 2)
+    const segments = snapshot.segments.map((segment) => ({
+      ...segment,
+      endAt: new Date(Date.parse(segment.startAt) + 3000).toISOString(),
+    }))
     return route.fulfill({
-      json: recordings(undefined, queryRequests === 1 ? 1 : 2),
+      json: { ...snapshot, segments, coverage: segments },
     })
   })
   await page.route("**/api/streams/**", (route) => {
@@ -287,6 +292,11 @@ test("refreshing recordings releases the current playback and requests a new sna
         status: 201,
         json: {
           id,
+          fileRange: {
+            startAt: "2026-10-16T16:00:00Z",
+            endAt: "2026-10-16T16:00:03Z",
+          },
+          startOffsetSeconds: 0,
           playlistUrl: `/api/streams/${id}/index.m3u8`,
           durationSeconds: 3,
           expiresAt: new Date(Date.now() + 120_000).toISOString(),
@@ -314,8 +324,8 @@ test("refreshing recordings releases the current playback and requests a new sna
     })
   })
   await page.goto("/playback")
-  await page.locator(".timeline-segment").first().click()
-  await page.getByRole("button", { name: "播放", exact: true }).click()
+  await page.getByRole("button", { name: "片段列表", exact: true }).click()
+  await page.getByRole("button", { name: /^选择片段 1，/ }).click()
   await expect(
     page.getByRole("button", { name: "关闭回放", exact: true })
   ).toBeVisible()
@@ -326,5 +336,5 @@ test("refreshing recordings releases the current playback and requests a new sna
   expect(queryRequests).toBe(2)
   expect(creates).toBe(1)
   await expect(page.locator("video")).toHaveCount(0)
-  await expect(page.getByText("已选片段", { exact: true })).toHaveCount(0)
+  await expect(page.locator(".stream-player")).toHaveCount(0)
 })

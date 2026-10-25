@@ -260,16 +260,26 @@ export class NvrService {
         404,
         "录像已变化，请刷新查询后重试。"
       )
-    const estimatedDurationSeconds = await this.estimateDuration(
+    const fileRange = await this.resolveFileRange(
       segment,
       date,
       Date.now() - started < 5000
     )
-    return estimatedDurationSeconds === undefined
+    return fileRange === undefined
       ? segment
-      : { ...segment, estimatedDurationSeconds }
+      : {
+          ...segment,
+          fileRange,
+          estimatedDurationSeconds:
+            (Date.parse(fileRange.endAt) - Date.parse(fileRange.startAt)) /
+            1000,
+          startOffsetSeconds: Math.max(
+            0,
+            (Date.parse(segment.startAt) - Date.parse(fileRange.startAt)) / 1000
+          ),
+        }
   }
-  private async estimateDuration(
+  private async resolveFileRange(
     segment: RawSegment,
     date: string,
     allowNeighbors: boolean
@@ -279,11 +289,11 @@ export class NvrService {
     const end = Date.parse(segment.endAt)
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return
     if (start > Date.parse(range.startAt) && end < Date.parse(range.endAt))
-      return (end - start) / 1000
+      return { startAt: segment.startAt, endAt: segment.endAt }
     if (!allowNeighbors) return
 
-    // A day query may label only part of a file. Neighbor searches enrich the
-    // estimate without replacing the original download URI or time labels.
+    // A day query may label only part of a file. Keep its coverage separate
+    // from the full file labels; never replace the original download URI.
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       const identity = (uri: string) => {
@@ -350,7 +360,10 @@ export class NvrService {
         mergedEnd = Math.max(mergedEnd, interval.end)
       }
       if (mergedStart > outerStart && mergedEnd < outerEnd)
-        return (mergedEnd - mergedStart) / 1000
+        return {
+          startAt: new Date(mergedStart).toISOString(),
+          endAt: new Date(mergedEnd).toISOString(),
+        }
     } catch {
       // Optional metadata must never block an otherwise valid file download.
     } finally {

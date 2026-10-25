@@ -82,6 +82,8 @@ export type RawSegment = {
   playbackURI: string
   codec?: string
   recordType?: string
+  fileRange?: { startAt: string; endAt: string }
+  startOffsetSeconds?: number
   estimatedDurationSeconds?: number
 }
 export function parseSearch(
