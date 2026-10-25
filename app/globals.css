@@ -469,6 +469,17 @@ body {
   min-width: 0;
   container-type: inline-size;
 }
+.live-startup {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+  background: var(--muted);
+  padding: 0.5rem;
+  pointer-events: none;
+}
+.video-surface[data-live-starting="true"] > .live-video-controls {
+  z-index: 1;
+}
 .stream-idle {
   width: 100%;
   flex: none;

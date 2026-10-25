@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs"
+import { execFileSync, type ChildProcess } from "node:child_process"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
 import { test, expect, type Page } from "@playwright/test"
 import { selectOption } from "./controls"
-import { splitFragmentedMp4 } from "../../server/mp4"
+import { mp4Boxes, splitFragmentedMp4 } from "../../server/mp4"
+import { LiveSessions } from "../../server/live"
+import { readNvrConfig } from "../../server/config"
+import { FragmentedMp4Demuxer } from "../../lib/media-export"
 
 async function channels(page: Page) {
   await page.route("**/api/channels", (route) =>
@@ -248,6 +254,419 @@ for (const codec of ["h264", "hevc"] as const)
     await page.getByRole("link", { name: "录像回放" }).click()
     await expect.poll(() => deleted.length).toBe(4)
     await expect(page).toHaveURL(/\/playback$/)
+  })
+test.describe("live startup buffering", () => {
+  async function prepare(page: Page) {
+    const media = splitFragmentedMp4(
+      readFileSync(
+        new URL("../../fixtures/synthetic-preview.mp4", import.meta.url)
+      )
+    )
+    const deleted: string[] = []
+    let created = 0
+    // Keep real decoded media at its first frame until the test asks it to play.
+    // This models native HLS exposing loadeddata before it starts playback.
+    await page.addInitScript(() => {
+      document.addEventListener(
+        "loadstart",
+        (event) => {
+          if (event.target instanceof HTMLVideoElement)
+            event.target.autoplay = false
+        },
+        true
+      )
+      document.addEventListener(
+        "loadeddata",
+        (event) => {
+          if (event.target instanceof HTMLVideoElement)
+            event.target.dataset.firstFrameReady = "true"
+        },
+        true
+      )
+    })
+    await channels(page)
+    await page.route("**/api/streams/**", (route) => {
+      const request = route.request(),
+        path = new URL(request.url()).pathname
+      if (request.method() === "POST") {
+        const id = `11111111-1111-4111-8111-${String(++created).padStart(12, "0")}`
+        return route.fulfill({
+          status: 201,
+          json: {
+            id,
+            playlistUrl: `/api/streams/${id}/index.m3u8`,
+            expiresAt: new Date(Date.now() + 600000).toISOString(),
+            mode: "stream-copy",
+            codec: "h264",
+          },
+        })
+      }
+      if (request.method() === "DELETE") {
+        deleted.push(path)
+        return route.fulfill({ status: 204 })
+      }
+      if (path.endsWith("index.m3u8"))
+        return route.fulfill({
+          contentType: "application/vnd.apple.mpegurl",
+          body: '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:3,\n0.m4s\n#EXT-X-ENDLIST\n',
+        })
+      return route.fulfill({
+        contentType: path.endsWith("init.mp4")
+          ? "video/mp4"
+          : "video/iso.segment",
+        body: path.endsWith("init.mp4") ? media.init : media.media,
+      })
+    })
+    await page.goto("/")
+    return {
+      first: page.getByRole("region", { name: "窗口 1", exact: true }),
+      deleted,
+    }
+  }
+
+  test("covers a decoded first frame until playback, and can stop and reconnect", async ({
+    page,
+  }) => {
+    const errors: string[] = []
+    page.on("pageerror", (error) => errors.push(error.name))
+    await page.clock.install()
+    const { first, deleted } = await prepare(page)
+    await first.getByRole("button", { name: "开始预览" }).click()
+    const video = first.locator("video")
+    await expect(video).toHaveAttribute("data-first-frame-ready", "true")
+    expect(
+      await video.evaluate((element: HTMLVideoElement) => ({
+        hasMedia: element.buffered.length > 0,
+        paused: element.paused,
+        time: element.currentTime,
+        display: getComputedStyle(element).display,
+        visibility: getComputedStyle(element).visibility,
+        opacity: getComputedStyle(element).opacity,
+      }))
+    ).toEqual({
+      hasMedia: true,
+      paused: true,
+      time: 0,
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+    })
+    await expect(first.getByRole("status")).toHaveText("正在缓冲画面")
+    const detachedVideo = await video.elementHandle()
+    await first.getByRole("button", { name: "停止预览" }).click()
+    await expect.poll(() => deleted.length).toBe(1)
+    await expect(video).toHaveCount(0)
+    await expect(first.getByRole("status")).toHaveCount(0)
+
+    await first.getByRole("button", { name: "开始预览" }).click()
+    await expect(video).toHaveAttribute("data-first-frame-ready", "true")
+    await detachedVideo!.evaluate((element) => {
+      element.dispatchEvent(new Event("playing"))
+      element.dispatchEvent(new Event("error"))
+    })
+    await expect(first.getByRole("status")).toHaveText("正在缓冲画面")
+    expect(deleted).toHaveLength(1)
+    await video.evaluate((element: HTMLVideoElement) => element.play())
+    await expect(first.getByRole("status")).toHaveCount(0)
+    await expect
+      .poll(() =>
+        video.evaluate(
+          (element: HTMLVideoElement) =>
+            element.getVideoPlaybackQuality().totalVideoFrames
+        )
+      )
+      .toBeGreaterThan(3)
+    await page.clock.fastForward(31000)
+    await expect(video).toHaveCount(1)
+    await expect(first.getByRole("status")).toHaveCount(0)
+    expect(deleted).toHaveLength(1)
+    await expect(
+      page.locator('[data-sonner-toast][data-type="error"]')
+    ).toHaveCount(0)
+    await first.getByRole("button", { name: "停止预览" }).click()
+    await expect.poll(() => deleted.length).toBe(2)
+    expect(errors).toEqual([])
+  })
+
+  test("releases a stream that never starts playing and can retry", async ({
+    page,
+  }) => {
+    await page.clock.install()
+    const { first, deleted } = await prepare(page)
+    await first.getByRole("button", { name: "开始预览" }).click()
+    await expect(first.locator("video")).toHaveAttribute(
+      "data-first-frame-ready",
+      "true"
+    )
+    await expect(first.getByRole("status")).toHaveText("正在缓冲画面")
+    await page.clock.fastForward(31000)
+    await expect.poll(() => deleted.length).toBe(1)
+    await expect(first.locator("video")).toHaveCount(0)
+    await expect(first.getByRole("status")).toHaveCount(0)
+    const errorToast = page.locator('[data-sonner-toast][data-type="error"]')
+    await expect(errorToast).toHaveCount(1)
+    await expect(errorToast).toContainText("等待实时画面缓冲超时，请重新连接。")
+    await first.getByRole("button", { name: "重试", exact: true }).click()
+    await expect(first.locator("video")).toHaveAttribute(
+      "data-first-frame-ready",
+      "true"
+    )
+    await expect(first.getByRole("status")).toHaveText("正在缓冲画面")
+    await first.getByRole("button", { name: "停止预览" }).click()
+    await expect.poll(() => deleted.length).toBe(2)
+  })
+})
+for (const codec of ["h264", "hevc"] as const)
+  test(`short live ${codec} fragments keep long GOPs decodable while rolling and joining late`, async ({
+    page,
+  }) => {
+    test.setTimeout(60000)
+    // Repackage existing synthetic three-second GOPs without re-encoding. Most
+    // half-second fragments depend on the keyframe in an earlier fragment.
+    const bytes = execFileSync(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-stream_loop",
+        "7",
+        "-i",
+        new URL(
+          `../../fixtures/${codec === "h264" ? "synthetic-preview.mp4" : "synthetic-preview-hevc.mp4"}`,
+          import.meta.url
+        ).pathname,
+        "-t",
+        "24",
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "copy",
+        "-an",
+        "-movflags",
+        "+frag_keyframe+empty_moov+default_base_moof",
+        "-frag_duration",
+        "500000",
+        "-f",
+        "mp4",
+        "pipe:1",
+      ],
+      { maxBuffer: 16 * 1024 * 1024 }
+    )
+    const boxes = mp4Boxes(bytes),
+      init = bytes.subarray(0, boxes.find((box) => box.type === "moof")!.start),
+      fragments: Buffer[] = [],
+      verifier = new FragmentedMp4Demuxer(),
+      independent: boolean[] = []
+    verifier.push(init)
+    let moof: Buffer | undefined
+    for (const box of boxes) {
+      if (box.type === "moof") moof = bytes.subarray(box.start, box.end)
+      else if (box.type === "mdat") {
+        const fragment = Buffer.concat([
+          moof!,
+          bytes.subarray(box.start, box.end),
+        ])
+        const packets = verifier.push(fragment)
+        independent.push(packets[0].keyframe)
+        expect(
+          packets.reduce((sum, packet) => sum + (packet.duration ?? 0), 0)
+        ).toBeCloseTo(0.5, 6)
+        fragments.push(fragment)
+        moof = undefined
+      }
+    }
+    expect(fragments).toHaveLength(48)
+    expect(independent.slice(0, 12)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ])
+
+    const active = new Set<EventEmitter>(),
+      timers = new Set<ReturnType<typeof setInterval>>(),
+      created: Awaited<ReturnType<LiveSessions["create"]>>[] = [],
+      deleted: string[] = [],
+      errors: string[] = []
+    let launches = 0
+    const sessions = new LiveSessions(() => {
+      const stdout = new PassThrough(),
+        stderr = new PassThrough(),
+        audio = new PassThrough()
+      // The reopened source starts between keyframes. It must wait for the
+      // next decodable anchor instead of exposing the dependent leading tail.
+      let at = launches++ === 0 ? 0 : 27
+      const child = Object.assign(new EventEmitter(), {
+        stdout,
+        stderr,
+        stdio: [null, stdout, stderr, audio],
+        kill() {
+          clearInterval(timer)
+          timers.delete(timer)
+          active.delete(child)
+          stdout.end()
+          stderr.end()
+          audio.end()
+          child.emit("close", 0)
+          return true
+        },
+      })
+      active.add(child)
+      const feed = () => {
+        if (at < fragments.length) stdout.write(fragments[at++])
+      }
+      const timer = setInterval(feed, 500)
+      timer.unref()
+      timers.add(timer)
+      queueMicrotask(() => {
+        stdout.write(init)
+        feed()
+      })
+      return child as unknown as ChildProcess
+    })
+    const config = readNvrConfig({
+      NVR_HOST: "synthetic.test",
+      NVR_USERNAME: "synthetic-user",
+      NVR_PASSWORD: "synthetic-password",
+    })
+    const firstFragmentIsIndependent = (id: string) => {
+      const playlist = sessions.playlist(id),
+        asset = /\n(\d+\.m4s)\n/.exec(playlist)![1],
+        parser = new FragmentedMp4Demuxer()
+      parser.push(sessions.asset(id, "init.mp4"))
+      return parser.push(sessions.asset(id, asset))[0].keyframe
+    }
+    page.on("pageerror", (error) => errors.push(error.name))
+    await channels(page)
+    await page.route("**/api/streams/**", async (route) => {
+      const request = route.request(),
+        path = new URL(request.url()).pathname,
+        [, , , id, asset] = path.split("/")
+      if (request.method() === "POST") {
+        expect(request.postDataJSON()).toEqual({ track: "101" })
+        const session = await sessions.create(
+          config,
+          async () => "101",
+          new AbortController().signal
+        )
+        created.push(session)
+        return route.fulfill({ status: 201, json: session })
+      }
+      if (request.method() === "DELETE") {
+        sessions.delete(id)
+        deleted.push(id)
+        return route.fulfill({ status: 204 })
+      }
+      try {
+        if (asset === "index.m3u8")
+          return route.fulfill({
+            contentType: "application/vnd.apple.mpegurl",
+            body: sessions.playlist(id),
+          })
+        return route.fulfill({
+          contentType: asset === "init.mp4" ? "video/mp4" : "video/iso.segment",
+          body: sessions.asset(id, asset),
+        })
+      } catch {
+        return route.fulfill({ status: 404 })
+      }
+    })
+    try {
+      await page.goto("/")
+      const first = page.getByRole("region", { name: "窗口 1", exact: true })
+      await first.getByRole("button", { name: "开始预览" }).click()
+      const video = first.locator("video")
+      await expect
+        .poll(() =>
+          video.evaluate(
+            (element: HTMLVideoElement) =>
+              element.getVideoPlaybackQuality().totalVideoFrames
+          )
+        )
+        .toBeGreaterThan(3)
+      await expect(first.getByRole("status")).toHaveCount(0)
+      const id = created[0].id
+      await expect
+        .poll(
+          () =>
+            Number(
+              /#EXT-X-MEDIA-SEQUENCE:(\d+)/.exec(sessions.playlist(id))![1]
+            ),
+          { timeout: 20000 }
+        )
+        .toBeGreaterThan(0)
+      const playlist = sessions.playlist(id),
+        durations = [...playlist.matchAll(/#EXTINF:([\d.]+)/g)].map((match) =>
+          Number(match[1])
+        )
+      expect(playlist).toContain("#EXT-X-TARGETDURATION:1\n")
+      expect(playlist).not.toContain("#EXT-X-INDEPENDENT-SEGMENTS")
+      expect(
+        durations.every((duration) => Math.abs(duration - 0.5) < 0.00001)
+      ).toBe(true)
+      expect(
+        durations.reduce((sum, duration) => sum + duration, 0)
+      ).toBeGreaterThanOrEqual(12)
+      expect(firstFragmentIsIndependent(id)).toBe(true)
+      const before = await video.evaluate((element: HTMLVideoElement) => ({
+        time: element.currentTime,
+        frames: element.getVideoPlaybackQuality().totalVideoFrames,
+      }))
+      // A seek across an evicted GOP advances currentTime without decoding.
+      await expect
+        .poll(() =>
+          video.evaluate(
+            (element: HTMLVideoElement, before) =>
+              element.currentTime > before.time + 2 &&
+              element.getVideoPlaybackQuality().totalVideoFrames >
+                before.frames + 20,
+            before
+          )
+        )
+        .toBe(true)
+      expect(
+        await video.evaluate(
+          (element: HTMLVideoElement) =>
+            element.getVideoPlaybackQuality().totalVideoFrames
+        )
+      ).toBeGreaterThan(100)
+      await first.getByRole("button", { name: "停止预览" }).click()
+      await expect.poll(() => deleted).toEqual([id])
+      expect(active.size).toBe(0)
+      expect(timers.size).toBe(0)
+
+      await first.getByRole("button", { name: "开始预览" }).click()
+      await expect.poll(() => created.length).toBe(2)
+      expect(firstFragmentIsIndependent(created[1].id)).toBe(true)
+      await expect
+        .poll(() =>
+          video.evaluate(
+            (element: HTMLVideoElement) =>
+              element.getVideoPlaybackQuality().totalVideoFrames
+          )
+        )
+        .toBeGreaterThan(3)
+      await expect(first.getByRole("status")).toHaveCount(0)
+      await first.getByRole("button", { name: "停止预览" }).click()
+      await expect.poll(() => deleted.length).toBe(2)
+      expect(active.size).toBe(0)
+      expect(timers.size).toBe(0)
+      expect(errors).toEqual([])
+      await expect(
+        page.locator('[data-sonner-toast][data-type="error"]')
+      ).toHaveCount(0)
+    } finally {
+      sessions.dispose()
+      for (const timer of timers) clearInterval(timer)
+    }
   })
 test("live start failure can retry and preparation can cancel", async ({
   page,

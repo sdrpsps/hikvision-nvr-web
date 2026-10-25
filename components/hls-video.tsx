@@ -24,6 +24,7 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
+import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import {
   Field,
   FieldGroup,
@@ -82,6 +83,7 @@ export function HlsVideo({
   const ptsOffset = useRef<number | undefined>(undefined)
   const [sound, setSound] = useState(false)
   const [paused, setPaused] = useState(true)
+  const [liveStarted, setLiveStarted] = useState(false)
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
   const [pendingSeek, setPendingSeek] = useState<number | null>(null)
@@ -178,19 +180,33 @@ export function HlsVideo({
     let disposed = false
     let failed = false
     let hls: import("hls.js").default | undefined
-    const fail = () => {
+    let startupTimer: ReturnType<typeof setTimeout> | undefined
+    const clearStartup = () => {
+      clearTimeout(startupTimer)
+      startupTimer = undefined
+    }
+    const fail = (
+      message = `画面加载失败，请重新打开，并确认浏览器支持 ${session.codec === "hevc" ? "H.265 / HEVC" : "H.264"}。`
+    ) => {
       if (disposed || failed) return
       failed = true
+      clearStartup()
       audio.current?.close()
       audio.current = null
       setSound(false)
       element.pause()
       hls?.destroy()
-      onError(
-        `画面加载失败，请重新打开，并确认浏览器支持 ${session.codec === "hevc" ? "H.265 / HEVC" : "H.264"}。`
+      onError(message)
+    }
+    const onMediaError = () => fail()
+    element.addEventListener("error", onMediaError)
+    if (live) {
+      element.addEventListener("playing", clearStartup, { once: true })
+      startupTimer = setTimeout(
+        () => fail("等待实时画面缓冲超时，请重新连接。"),
+        30_000
       )
     }
-    element.addEventListener("error", fail)
     const restoreRate = () => {
       if (!live && preferences.current) {
         try {
@@ -210,19 +226,20 @@ export function HlsVideo({
     else
       void import("hls.js")
         .then(({ default: Hls }) => {
-          if (disposed) return
+          if (disposed || failed) return
           if (!Hls.isSupported()) {
             if (nativeHls) {
               element.src = session.playlistUrl
               return
             }
-            onError("此浏览器不支持 HLS 播放，请使用新版 Safari 或 Chrome。")
+            fail("此浏览器不支持 HLS 播放，请使用新版 Safari 或 Chrome。")
             return
           }
           hls = new Hls({
             enableWorker: true,
             maxBufferLength: live ? 12 : 35,
-            backBufferLength: live ? 0 : 35,
+            // Keep prior GOPs when short fragments share decoding dependencies.
+            backBufferLength: live ? 12 : 35,
             startPosition: live ? -1 : 0,
           })
           hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -235,14 +252,16 @@ export function HlsVideo({
           hls.attachMedia(element)
         })
         .catch(() => {
-          if (!disposed) onError("播放器加载失败，请重试。")
+          if (!disposed) fail("播放器加载失败，请重试。")
         })
     return () => {
       disposed = true
+      clearStartup()
       audio.current?.close()
       audio.current = null
       hls?.destroy()
-      element.removeEventListener("error", fail)
+      element.removeEventListener("error", onMediaError)
+      element.removeEventListener("playing", clearStartup)
       element.removeEventListener("loadedmetadata", restoreRate)
       element.pause()
       element.removeAttribute("src")
@@ -304,7 +323,11 @@ export function HlsVideo({
     }
   }
   return (
-    <div className="video-surface" ref={frame}>
+    <div
+      className="video-surface"
+      ref={frame}
+      data-live-starting={live && !liveStarted}
+    >
       <SaveFullscreenActivity />
       {live && liveTrack && <LiveRecordingIndicator track={liveTrack} />}
       <video
@@ -317,6 +340,9 @@ export function HlsVideo({
         aria-label={live ? "实时预览画面" : "历史录像预览"}
         onPlay={() => {
           setPaused(false)
+        }}
+        onPlaying={() => {
+          if (live) setLiveStarted(true)
         }}
         onPause={() => setPaused(true)}
         onEnded={(event) => {
@@ -342,6 +368,18 @@ export function HlsVideo({
         onCanPlay={applyPendingSeek}
         onRateChange={(event) => setRate(event.currentTarget.playbackRate)}
       />
+      {live && !liveStarted && (
+        <Empty
+          className="live-startup"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <EmptyHeader>
+            <EmptyTitle>正在缓冲画面</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      )}
       {!live && (
         <>
           <div className="playback-timeline">

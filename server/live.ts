@@ -9,8 +9,16 @@ export const LIVE_TTL_MS = 10 * 60_000
 export const LIVE_IDLE_MS = 30_000
 export const MAX_LIVE_SESSIONS = 16
 export const MAX_LIVE_BYTES = 32 * 1024 * 1024
+export const LIVE_FRAGMENT_DURATION_US = 500_000
+export const MAX_LIVE_SEGMENTS = 256
 const MAX_BOX_BYTES = 8 * 1024 * 1024
-type Segment = { sequence: number; data: Buffer; duration: number }
+const STARTUP_BUFFER_SECONDS = 3
+type Segment = {
+  sequence: number
+  data: Buffer
+  duration: number
+  independent: boolean
+}
 type Session = {
   child?: ChildProcess
   timer: NodeJS.Timeout
@@ -18,6 +26,7 @@ type Session = {
   touchedAt: number
   init: Buffer
   segments: Segment[]
+  targetDuration?: number
   codec?: "h264" | "hevc"
   videoStartSeconds?: number
   audioStatus: "pending" | "available" | "unsupported"
@@ -79,6 +88,35 @@ const launch: Launcher = (args) =>
     stdio: ["ignore", "pipe", "pipe", "pipe"],
     shell: false,
   })
+
+function trimLiveWindow(session: Session) {
+  const segments = session.segments
+  const target = session.targetDuration!
+  const trim = (minimumSeconds: number) => {
+    let seconds = 0
+    for (let index = segments.length - 1; index >= 0; index--) {
+      seconds += segments[index].duration
+      if (segments[index].independent && seconds + 1e-6 >= minimumSeconds) {
+        if (index) segments.splice(0, index)
+        return
+      }
+    }
+  }
+  const exceedsLimit = () =>
+    segments.length > MAX_LIVE_SEGMENTS ||
+    segments.reduce((sum, segment) => sum + segment.data.length, 0) >
+      MAX_LIVE_BYTES
+  // Every published window starts at a random-access frame. Dependent short
+  // fragments remain playable because their preceding GOP is retained.
+  trim(Math.max(12, target * 6))
+  if (exceedsLimit()) trim(target * 3)
+  if (exceedsLimit())
+    throw new AppError(
+      "LIVE_BUFFER_LIMIT",
+      502,
+      "实时视频缓冲超出安全上限，请重新连接。"
+    )
+}
 
 // Bounded rolling fMP4 in memory. No private video files or raw FFmpeg logs.
 export class LiveSessions {
@@ -153,7 +191,11 @@ export class LiveSessions {
       const track = await resolve()
       if (!this.sessions.has(id))
         throw new AppError("MEDIA_CANCELLED", 503, "实时预览已停止。")
-      const child = this.start(liveArguments(config, track))
+      const child = this.start(
+        liveArguments(config, track, {
+          videoFragmentDurationUs: LIVE_FRAGMENT_DURATION_US,
+        })
+      )
       session.child = child
       child.stderr?.resume()
       child.on("error", () =>
@@ -239,30 +281,47 @@ export class LiveSessions {
               const media = splitFragmentedMp4(
                 Buffer.concat([session.init, data])
               )
+              fragment = Buffer.alloc(0)
+              // A connection can begin between keyframes. Never publish that
+              // undecodable prefix or use it as the audio/video time anchor.
+              if (!session.segments.length && !media.startsWithKeyframe)
+                continue
+              session.targetDuration ??= Math.max(
+                1,
+                Math.ceil(media.decodeDurationSeconds)
+              )
+              // HLS target duration is fixed for the lifetime of the playlist.
+              if (
+                Math.round(media.decodeDurationSeconds) > session.targetDuration
+              )
+                throw new Error("Unexpected live fragment duration")
               session.codec = media.codec
               session.videoStartSeconds ??= media.startSeconds
               session.segments.push({
                 sequence: sequence++,
                 data,
-                duration: media.durationSeconds,
+                // PTS ranges can overlap at a B-frame boundary. Decode sample
+                // duration keeps EXTINF cumulative time continuous.
+                duration: media.decodeDurationSeconds,
+                independent: media.startsWithKeyframe,
               })
-              fragment = Buffer.alloc(0)
-              while (
-                session.segments.length > 6 ||
-                session.segments.reduce(
-                  (sum, item) => sum + item.data.length,
-                  0
-                ) > MAX_LIVE_BYTES
+              trimLiveWindow(session)
+              if (
+                session.segments.reduce((sum, item) => sum + item.duration, 0) +
+                  1e-6 >=
+                Math.max(STARTUP_BUFFER_SECONDS, session.targetDuration * 3)
               )
-                session.segments.shift()
-              if (session.segments.length) resolveReady()
+                resolveReady()
             }
           }
-        } catch {
-          fail(
-            "LIVE_INVALID_MEDIA",
-            "实时视频无法直接封装为 H.264 / H.265 播放流，请检查设备编码。"
-          )
+        } catch (error) {
+          if (error instanceof AppError && error.code === "LIVE_BUFFER_LIMIT")
+            fail(error.code, error.message)
+          else
+            fail(
+              "LIVE_INVALID_MEDIA",
+              "实时视频无法直接封装为 H.264 / H.265 播放流，请检查设备编码。"
+            )
         }
       })
       await ready
@@ -300,8 +359,8 @@ export class LiveSessions {
     return session
   }
   playlist(id: string) {
-    const { segments } = this.get(id)
-    return `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${Math.max(1, ...segments.map((s) => Math.ceil(s.duration)))}\n#EXT-X-MEDIA-SEQUENCE:${segments[0]?.sequence ?? 0}\n#EXT-X-MAP:URI="init.mp4"\n${segments.map((s) => `#EXTINF:${s.duration.toFixed(6)},\n${s.sequence}.m4s\n`).join("")}`
+    const { segments, targetDuration } = this.get(id)
+    return `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:${segments[0]?.sequence ?? 0}\n#EXT-X-START:TIME-OFFSET=0,PRECISE=NO\n#EXT-X-MAP:URI="init.mp4"\n${segments.map((s) => `#EXTINF:${s.duration.toFixed(6)},\n${s.sequence}.m4s\n`).join("")}`
   }
   audio(id: string, after: number) {
     const session = this.get(id)

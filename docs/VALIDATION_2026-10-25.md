@@ -143,3 +143,53 @@
 完整运行的唯一失败来自新增测试的假设：预期手动刷新失败后切页不重新读取通道，实际请求增加。核对当前 `@tanstack/query-core@5.104.5` 的 error reducer，失败会使查询失效，重挂载可以重新读取；现断言该行为并继续检查新页面只有一个包含详细错误的 Sonner。应用请求逻辑未因测试修改。查询专项另覆盖认证失败、网络失败、无效 JSON 的不自动重试与显式恢复、取消/迟到响应、关闭设备详情和刷新清理。
 
 环境：尝试启动 `3102` 后，Next.js 检测到同仓库已有 `3000` 开发实例并退出；改为复用健康的 `http://localhost:3000` 与热更新，没有停止已有服务。Chrome 启动受普通沙箱限制，自动审批后在允许启动 Chrome 的环境执行回归。没有读取真实 NVR 或生成真实画面产物；本轮不提升 Safari、历史 RTSP 或媒体绝对时间映射的验收结论。下一步仅按用户新任务继续；当前操作反馈迁移已完成。
+
+## Safari 实时预览首帧与起播缓冲
+
+用户报告 Safari 在出现预览画面后短暂停住。原生 Safari 27.0.1 的独立同源对照页使用真实 NVR HEVC 源与当前媒体接口，两次均在约 4.36 秒呈现首帧、约 12.35 秒触发 `playing`；期间播放时间保持 0，初始缓冲 4 秒，积累到三段共 12 秒后才连续播放。实测首帧停留约 8 秒，与用户报告的一两秒不完全相同，不能据此断言其原始操作的全部时序。立即显式调用 `video.play()` 的两次对照仍在约 12.33 / 12.34 秒开始播放，未缩短等待，未纳入实现。此前 Chrome 单路对照只测到约 22–23 ms 的续片等待，不能替代 Safari 结论。
+
+实现沿用原生 HLS、`autoPlay` 和原码换封装。所有实时播放器在首次 `playing` 前用现有 `Empty` 显示“正在缓冲画面”，以不透明覆盖层挡住提前展示的静止首帧；视频本体仍为正常显示，避免触发 Safari 的不可见媒体策略。覆盖层不接收指针事件，控件保持在其上方。首次播放后永久移除该会话的起播层，后续普通 `stalled` 不重新遮挡或报错。新增 30 秒首次起播看门狗，失败走既有通知、释放与重试；首次 `playing`、失败和卸载均清理定时器。文件回放和录制链路不新增此等待逻辑。
+
+**已验证（实机）**：原生 Safari 实际应用经临时同源 iframe 观测，首次 HEVC 帧约 4.365 秒出现时覆盖层仍在，约 12.375 秒触发 `playing` 后覆盖层撤下；视频本体始终 `display:block / visibility:visible / opacity:1`。从发起预览观察 36 秒，正常连续播放约 23 秒，首次起播之后没有观察到超过 200 ms 的呈现帧间隔，30 秒看门狗未误杀。正常停止及另一次 `loadeddata` 后、尚未播放时停止均返回 DELETE 204，播放列表随后 404，视频节点清零。临时网页、窗口与本机遥测服务均已删除/关闭，没有保存、截图或展示真实媒体产物。原生脚本通过 `/private/tmp/hikvision-safari-app-startup.mjs` 执行；不依赖 Safari 的 Apple Events JavaScript 开关，也未修改浏览器设置。
+
+**已验证（自动测试；浏览器使用模拟 API 与合成媒体）**：
+
+| 命令 / 检查 | 结果 |
+| --- | --- |
+| `pnpm test` | 16 个文件、212 项通过，1.87 秒 |
+| `pnpm typecheck`；`pnpm lint`；改动 TSX/测试 Prettier 检查 | 通过 |
+| `TEST_BASE_URL=http://localhost:3000 NVR_INTEGRATION=0 RUN_NVR_SAVE_TESTS=0 RUN_NVR_LONG_SAVE_TESTS=0 pnpm exec playwright test tests/browser/live.spec.ts tests/browser/preview.spec.ts --workers=1 --output=/private/tmp/hikvision-live-startup-results` | 22 通过、2 实机用例未启用，49.7 秒；新增首帧已解码但未播放的覆盖、停止与重开、旧节点迟到事件、真实播放后计时器取消、30 秒超时释放/通知/重试；包含 H.264 / HEVC、G.711、seek、连续播放与既有清理回归 |
+| `pnpm build`；`git diff --check` | 通过；生产编译 1115 ms、TypeScript 1537 ms、静态页面 5/5 |
+
+额外执行整份 `app/globals.css` 的 Prettier 检查，提示既有文件末尾 7 处单行规则不符合格式；核对 HEAD 同样存在这些问题，本次新增的两个 CSS 规则格式通过，未扩大改动整理无关样式。临时诊断页面及 `4317` 监听已清理，开发实例 `/api/health` 返回 `{"status":"ok"}`。
+
+上述阶段仅修正起播状态。用户随后授权缩短实际等待，短分片实现与独立验证见下节；Safari 多路、声音、全屏与长期稳定性仍按各自范围验收。
+
+## Safari 实时预览短分片与实际起播优化
+
+实时预览专用 FFmpeg 输出改为约 500ms 的 fMP4 分片，音视频继续 stream copy，录制传输及历史文件回放的参数保持各自链路。此为普通 HLS 的短分片，没有增加 LL-HLS PART、阻塞刷新或转码。HEVC B 帧的相邻短片 PTS 范围可能重叠，因此 `splitFragmentedMp4` 新增 DTS 起点、DTS 时长、样本数及首样本关键帧标记，原有 PTS 字段继续服务历史回放；`EXTINF` 使用 DTS 时长，避免累计漂移。关键帧标记按 trun / first_sample_flags / tfhd / trex 的继承规则读取，缺省依赖状态保守处理。
+
+连接开头的非关键帧分片被丢弃，首个接受的关键帧建立音画锚点；滚动窗口只在关键帧边界移动，不能因缩短分片而直接丢弃其依赖的 GOP。会话固定 `TARGETDURATION`，列表从首片开始，至少积累 `max(3秒, 3×TARGETDURATION)` 才返回就绪；没有声明全部分片独立。正常保留至少 `max(12秒, 6×TARGETDURATION)`，超过 32MiB 或 256 片后可沿关键帧收缩到至少 3 个目标时长，仍超限则返回 `LIVE_BUFFER_LIMIT` 并释放。异常分片时长、启动超时、取消及失败沿原有路径清理。
+
+**已验证（实机，真实 NVR HEVC、Safari 27.0.1、实际应用）**：重新运行 `node /private/tmp/hikvision-safari-app-startup.mjs`，两次从点击到首个呈现帧为 3.455 / 3.481 秒，到 `playing` 为 **3.448 / 3.486 秒**；首帧随即推进，前述旧版约 12.35 秒才开始连续播放。第一轮从点击观察 36 秒，呈现 796 帧、媒体时间推进约 32 秒；第二轮观察约 15 秒、307 帧。两轮均未记录到超过 200ms 的呈现帧间隔；首轮在起播同一时刻有一次 `waiting`，紧接着再次 `playing`，之后未观察到停顿。首帧覆盖在播放后撤下，视频本体保持正常显示。停止后均 DELETE 204、播放列表 404、视频节点为 0。
+
+新分片起播很快，第二轮脚本未捕获到可操作的 `loadeddata` 后、`playing` 前停留期，`stoppedDuringStartup=false`；该轮只能证明正常停止，准备中取消沿用前一阶段实机证据及本轮生命周期测试，不能把该字段写为新的准备中实机验收。临时同源页面、脚本创建的 Safari 窗口及 4317 遥测服务均已清理；未保存画面、截图或声音，也未修改 Safari Apple Events JavaScript 开关。
+
+**已验证（原生 Safari，合成 H.264）**：`node node_modules/tsx/dist/cli.mjs /private/tmp/hikvision-safari-short-h264.mts` 使用当前实际 `LiveSessions`、既有 3 秒 GOP 合成素材，FFmpeg 仅复制生成半秒分片。从页面发起到 `loadeddata` 2.560 秒、首个呈现帧 2.563 秒、`playing` 2.572 秒；总观察 26.851 秒、媒体推进 24.278 秒、292 帧。没有 `waiting` / `stalled` / `error` 或超过 200ms 的呈现帧间隔。14.663 秒时列表已滚动至 sequence 6，随后继续播放约 12.19 秒，最高 sequence 30，检查到的窗口首片均为关键帧。DELETE 204、播放列表 404，活动假源和馈送计时器为 0；4318 服务与脚本新建窗口已关闭。此证据不扩写为真实 NVR H.264 或声音实机验收。
+
+Chrome 的新增短片回归最初失败：滚动后实际只解码 32 / 41 帧。诊断 H.264 时约 3.026 秒进入 `playing`，媒体时间 1.0615 秒时缓冲从 `[0,3.5]` 变为 `[3,4]`，随后等待并跳到下一关键帧。原因是旧 `backBufferLength=0` 配置仅保留 hls.js 计算的一段时长；MSE 删除到下个关键帧时会越过当前播放位置。改为保留至少 12 秒后，对照 H.264 / HEVC 在约 14.9 秒分别解码 183 / 181 帧，采样无 `waiting` / `seeking`，缓冲回收后继续推进。没有放宽原先大于 100 帧的断言来掩盖问题。
+
+**已验证（自动测试；浏览器均为模拟 API / 合成媒体）**：
+
+| 命令 / 检查 | 结果 |
+| --- | --- |
+| `pnpm test` | 17 文件、235 项通过，2.47 秒；新增 MP4 DTS / 样本标记继承、双编码短分片、准备门槛、关键帧窗口、固定目标时长、容量收缩/失败与释放测试 |
+| `pnpm typecheck`；`pnpm lint`；相关 TS / TSX Prettier 检查 | 通过 |
+| `TEST_BASE_URL=http://localhost:3000 NVR_INTEGRATION=0 RUN_NVR_SAVE_TESTS=0 RUN_NVR_LONG_SAVE_TESTS=0 pnpm exec playwright test --workers=1 --grep-invert 'short live' --output=/private/tmp/hikvision-short-hls-regression-results` | 61 通过、8 实机用例未启用，2.0 分钟；包含预览、文件回放、声音、seek、连续播放、录制/下载、并发与清理。新增短流另行检查 |
+| 同上环境，`pnpm exec playwright test tests/browser/live.spec.ts tests/browser/preview.spec.ts --workers=1 --output=/private/tmp/hikvision-short-hls-final-results` | 最终配置 24 通过、2 实机用例未启用，1.6 分钟；含两种编码的 500ms 分片实际解码、窗口滚动、依赖片中途重开、超过 100 帧，以及滚动后同时推进超过 2 秒和新增超过 20 帧，避免 seek 跳过缺口误判成功。首帧覆盖/超时、音频、历史 seek/连续播放及清理均通过 |
+| `TEST_BASE_URL=http://localhost:3000 NVR_INTEGRATION=1 pnpm exec playwright test tests/browser/live.spec.ts --workers=1 -g 'real LAN live preview' --output=/private/tmp/hikvision-short-hls-device-results` | **已验证（实机）**：Chrome 真实 NVR HEVC 1/1 通过，6.0 秒；解码帧继续增长至 33，停止 DELETE 204、列表 404，无页面错误。仅为短验收，滚动稳定性由双编码合成专项与 Safari 原生观察分开覆盖 |
+| `pnpm build` | 通过；生产编译 711ms、TypeScript 1876ms、静态页面 5/5 |
+
+边界：本轮真实源为单路 HEVC；H.264 的 Safari 证据使用合成素材。Chrome 保留 12 秒已播放缓冲覆盖当前已测 3 / 4 秒 GOP，不承诺任意超过 12 秒的 GOP。起播耗时是本机两次对照，不是所有网络/设备的上限；多路负载、声音人工验收、休眠恢复和长期稳定性继续保持待验证。真实检查禁用截图、视频和 trace，只记录媒体时序及资源状态。
+
+交付清理复核：FFmpeg 进程计数为 0，4317 / 4318 临时诊断端口均未监听，`public` 中无临时 Safari 页面；现有开发实例保留且 `/api/health` 返回 `{"status":"ok"}`。最终 `git diff --check` 通过。

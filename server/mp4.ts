@@ -56,8 +56,12 @@ export function splitFragmentedMp4(buffer: Buffer) {
     invalid()
   const tracks = boxes(moov.data).filter((box) => box.type === "trak")
   if (tracks.length !== 1) invalid()
-  const mdia = boxes(tracks[0].data).find((box) => box.type === "mdia")
-  if (!mdia) invalid()
+  const track = boxes(tracks[0].data),
+    mdia = track.find((box) => box.type === "mdia"),
+    tkhd = track.find((box) => box.type === "tkhd")
+  if (!mdia || !tkhd || tkhd.data[0] > 1) invalid()
+  const trackId = u32(tkhd.data, tkhd.data[0] === 1 ? 20 : 12)
+  if (!trackId) invalid()
   const minf = boxes(mdia.data).find((box) => box.type === "minf")
   const stbl = minf && boxes(minf.data).find((box) => box.type === "stbl")
   const stsd = stbl && boxes(stbl.data).find((box) => box.type === "stsd")
@@ -82,20 +86,37 @@ export function splitFragmentedMp4(buffer: Buffer) {
   const timescale = u32(mdhd.data, mdhd.data[0] === 1 ? 20 : 12)
   if (!timescale) invalid()
   const mvex = boxes(moov.data).find((box) => box.type === "mvex")
-  const trex = mvex && boxes(mvex.data).find((box) => box.type === "trex")
+  const trex =
+    mvex &&
+    boxes(mvex.data).find(
+      (box) => box.type === "trex" && u32(box.data, 4) === trackId
+    )
   const trackDefault = trex ? u32(trex.data, 12) : 0
+  const trackDefaultFlags = trex ? u32(trex.data, 20) : undefined
   let min = Infinity,
     max = 0,
-    samples = 0
+    samples = 0,
+    decodeMin = Infinity,
+    decodeMax = 0,
+    firstSampleFlags: number | undefined
   for (const moof of top.filter((box) => box.type === "moof")) {
     for (const traf of boxes(moof.data).filter((box) => box.type === "traf")) {
       const children = boxes(traf.data),
         tfhd = children.find((box) => box.type === "tfhd"),
         tfdt = children.find((box) => box.type === "tfdt")
-      if (!tfhd || !tfdt) invalid()
+      if (!tfhd || !tfdt || tfhd.data[0] !== 0 || u32(tfhd.data, 4) !== trackId)
+        invalid()
       const f = flags(tfhd.data)
       let at = 8 + (f & 1 ? 8 : 0) + (f & 2 ? 4 : 0)
       const defaultDuration = f & 8 ? u32(tfhd.data, at) : trackDefault
+      if (f & 8) at += 4
+      if (f & 16) {
+        u32(tfhd.data, at)
+        at += 4
+      }
+      const defaultSampleFlags = f & 32 ? u32(tfhd.data, at) : trackDefaultFlags
+      if (f & 32) at += 4
+      if (at !== tfhd.data.length) invalid()
       if (tfdt.data[0] > 1) invalid()
       let timestamp: number
       if (tfdt.data[0] === 1) {
@@ -107,8 +128,16 @@ export function splitFragmentedMp4(buffer: Buffer) {
       for (const trun of children.filter((box) => box.type === "trun")) {
         const tf = flags(trun.data),
           count = u32(trun.data, 4)
+        // ISO BMFF does not allow first_sample_flags and sample_flags together.
+        if (tf & 4 && tf & 0x400) invalid()
         if ((samples += count) > 100000 || trun.data[0] > 1) invalid()
-        at = 8 + (tf & 1 ? 4 : 0) + (tf & 4 ? 4 : 0)
+        at = 8
+        if (tf & 1) {
+          u32(trun.data, at)
+          at += 4
+        }
+        const runFirstFlags = tf & 4 ? u32(trun.data, at) : undefined
+        if (tf & 4) at += 4
         for (let i = 0; i < count; i++) {
           const duration = tf & 0x100 ? u32(trun.data, at) : defaultDuration
           if (tf & 0x100) at += 4
@@ -116,10 +145,17 @@ export function splitFragmentedMp4(buffer: Buffer) {
             u32(trun.data, at)
             at += 4
           }
-          if (tf & 0x400) {
-            u32(trun.data, at)
-            at += 4
-          }
+          const sampleFlags =
+            tf & 0x400
+              ? u32(trun.data, at)
+              : i === 0
+                ? (runFirstFlags ?? defaultSampleFlags)
+                : defaultSampleFlags
+          if (tf & 0x400) at += 4
+          // A zero/absent dependency field is unknown, not proof of a keyframe.
+          if (sampleFlags !== undefined && ((sampleFlags >>> 24) & 3) === 3)
+            invalid()
+          if (decodeMin === Infinity) firstSampleFlags = sampleFlags
           let composition = 0
           if (tf & 0x800) {
             composition = u32(trun.data, at)
@@ -127,20 +163,28 @@ export function splitFragmentedMp4(buffer: Buffer) {
               composition -= 0x100000000
             at += 4
           }
-          if (!duration) invalid()
+          if (!duration || !Number.isSafeInteger(timestamp + duration))
+            invalid()
+          decodeMin = Math.min(decodeMin, timestamp)
+          decodeMax = Math.max(decodeMax, timestamp + duration)
           min = Math.min(min, timestamp + composition)
           max = Math.max(max, timestamp + composition + duration)
           timestamp += duration
         }
+        if (at !== trun.data.length) invalid()
       }
     }
   }
   const durationSeconds = (max - min) / timescale
+  const decodeDurationSeconds = (decodeMax - decodeMin) / timescale
   if (
     !samples ||
     !Number.isFinite(durationSeconds) ||
     durationSeconds <= 0 ||
-    durationSeconds > 40
+    durationSeconds > 40 ||
+    !Number.isFinite(decodeDurationSeconds) ||
+    decodeDurationSeconds <= 0 ||
+    decodeDurationSeconds > 40
   )
     invalid()
   return {
@@ -148,6 +192,13 @@ export function splitFragmentedMp4(buffer: Buffer) {
     media: buffer.subarray(first.start),
     durationSeconds,
     startSeconds: min / timescale,
+    decodeStartSeconds: decodeMin / timescale,
+    decodeDurationSeconds,
+    sampleCount: samples,
+    startsWithKeyframe:
+      firstSampleFlags !== undefined &&
+      !(firstSampleFlags & 0x10000) &&
+      ((firstSampleFlags >>> 24) & 3) === 2,
     codec,
   }
 }
