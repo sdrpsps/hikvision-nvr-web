@@ -63,6 +63,7 @@ const active = (task: SaveTask) =>
   ["preparing", "saving", "stopping"].includes(task.state)
 const routineTaskMessages = new Set([
   "请选择保存位置。",
+  "正在启动浏览器下载…",
   "正在连接媒体源…",
   "正在收尾并保存文件…",
   "正在补齐停止前画面的声音并保存…",
@@ -257,7 +258,10 @@ export function BrowserSaveProvider({ children }: { children: ReactNode }) {
           audioPackets: 0,
           files: 0,
           createdAt: Date.now(),
-          message: "请选择保存位置。",
+          message:
+            capability === "download"
+              ? "正在启动浏览器下载…"
+              : "请选择保存位置。",
         },
       ])
       try {
@@ -791,6 +795,7 @@ export function LiveRecordButton({
   const [open, setOpen] = useState(false)
   const [limit, setLimit] = useState(30)
   const [segmented, setSegmented] = useState(false)
+  const [nativeDownload, setNativeDownload] = useState(false)
   if (task)
     return (
       <Button
@@ -814,11 +819,13 @@ export function LiveRecordButton({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (next)
+        if (next) {
+          setNativeDownload(saveCapability() === "download")
           setSegmented(
             "showDirectoryPicker" in window &&
               typeof window.showDirectoryPicker === "function"
           )
+        }
         setOpen(next)
       }}
     >
@@ -888,7 +895,7 @@ export function LiveRecordButton({
             }}
           >
             <CircleIcon data-icon="inline-start" />
-            选择位置并录制
+            {nativeDownload ? "开始录制" : "选择位置并录制"}
           </Button>
         </div>
       </DialogContent>
@@ -908,6 +915,12 @@ export function SaveCapabilityNotice() {
     const timeout = setTimeout(() => setCapability(saveCapability()), 0)
     return () => clearTimeout(timeout)
   }, [])
+  if (capability === "download")
+    return (
+      <p className="text-sm text-muted-foreground">
+        文件保存到浏览器的下载位置，可在下载列表中查看。
+      </p>
+    )
   return capability === "insecure" || capability === "unsupported" ? (
     <Alert variant="destructive">
       <AlertTitle>当前环境无法流式保存</AlertTitle>

@@ -34,6 +34,40 @@ function cancelled() {
   return new DOMException("保存已取消。", "AbortError")
 }
 
+function waitForRegistration(
+  registration: Promise<ServiceWorkerRegistration>,
+  signal: AbortSignal
+) {
+  return new Promise<ServiceWorkerRegistration>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout)
+      signal.removeEventListener("abort", aborted)
+    }
+    const aborted = () => {
+      cleanup()
+      reject(cancelled())
+    }
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error("流式保存初始化超时，请重试。"))
+    }, 15000)
+    signal.addEventListener("abort", aborted, { once: true })
+    // Browser registration itself cannot be aborted. Settling this wait keeps
+    // a late result from starting a cancelled or expired download.
+    registration.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (error) => {
+        cleanup()
+        reject(error)
+      }
+    )
+    if (signal.aborted) aborted()
+  })
+}
+
 function waitForActivation(worker: ServiceWorker, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     const finish = (error?: Error) => {
@@ -121,9 +155,15 @@ async function downloadDestination(
   const session: DownloadSession = { controller: new AbortController() }
   downloads.set(id, session)
   try {
-    const registration = await navigator.serviceWorker.register(
-      `/browser-save-sw.js?v=${SAVE_PROTOCOL}`,
-      { scope: "/local-saves/", updateViaCache: "none" }
+    const registration = await waitForRegistration(
+      navigator.serviceWorker.register(
+        `/browser-save-sw.js?v=${SAVE_PROTOCOL}`,
+        {
+          scope: "/local-saves/",
+          updateViaCache: "none",
+        }
+      ),
+      session.controller.signal
     )
     if (session.controller.signal.aborted) throw cancelled()
     // register() can return an old active worker while an updated protocol is
@@ -136,21 +176,24 @@ async function downloadDestination(
     await waitForActivation(worker, session.controller.signal)
     const channel = new MessageChannel()
     session.port = channel.port1
-    try {
-      await waitForPort(
-        session,
-        "registered",
-        10000,
-        "浏览器未响应保存请求。",
-        () =>
+    await waitForPort(
+      session,
+      "registered",
+      10000,
+      "浏览器未响应保存请求。",
+      () => {
+        try {
           worker.postMessage({ type: "register-save", id, filename }, [
             channel.port2,
           ])
-      )
-    } finally {
-      // close() is harmless after transfer, and also handles a clone failure.
-      channel.port2.close()
-    }
+        } catch (error) {
+          channel.port2.close()
+          throw error
+        }
+        // Ownership now belongs to the SW. Closing this transferred handle
+        // after its acknowledgment also closes the receiver in native Safari.
+      }
+    )
     // Navigate in a hidden frame: <a download> bypasses this SW in Chromium,
     // while a new window may be blocked after asynchronous initialization.
     const frame = document.createElement("iframe")

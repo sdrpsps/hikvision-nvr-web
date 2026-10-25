@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { rm, writeFile } from "node:fs/promises"
 import { createServer, type Server, type ServerResponse } from "node:http"
 import { execFileSync } from "node:child_process"
 import {
@@ -380,7 +380,7 @@ async function startRecording(page: Page, camera = "摄像头 1") {
     .first()
     .click()
   await page
-    .getByRole("button", { name: "选择位置并录制", exact: true })
+    .getByRole("button", { name: /^(选择位置并录制|开始录制)$/ })
     .click()
   await page
     .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -687,6 +687,92 @@ test("cancelling the location picker starts neither a source nor a recording tas
   expect(source.requests).toEqual([])
 })
 
+test("recording without file pickers starts a complete native download through the application", async ({
+  page,
+  context,
+}, info) => {
+  const source = await syntheticSource(context)
+  await queries(page)
+  await page.addInitScript(() => {
+    for (const name of ["showDirectoryPicker", "showSaveFilePicker"])
+      Object.defineProperty(window, name, {
+        configurable: true,
+        value: undefined,
+      })
+  })
+  await page.goto("/")
+  await page.getByRole("button", { name: "录制 摄像头 1", exact: true }).click()
+  const setup = page.getByRole("dialog", { name: "录制 摄像头 1", exact: true })
+  const start = setup.getByRole("button", { name: "开始录制", exact: true })
+  await expect(start).toBeVisible()
+  await expect(
+    setup.getByRole("button", { name: "选择位置并录制", exact: true })
+  ).toHaveCount(0)
+  const downloaded = page.waitForEvent("download")
+  const [download] = await Promise.all([downloaded, start.click()])
+  const activity = page.getByRole("region", {
+    name: "进行中的录制与下载",
+    exact: true,
+  })
+  const row = activity.locator(".save-activity-item")
+  const path = info.outputPath("native-recording.mkv")
+  try {
+    await expect(row).toHaveAttribute("data-state", "saving", {
+      timeout: 15000,
+    })
+    await expect(row).toContainText("00:00:03")
+    await row
+      .getByRole("button", { name: "停止并保存 摄像头 1", exact: true })
+      .click()
+    await expect(activity).toBeHidden({ timeout: 15000 })
+    await expect.poll(() => source.open.size).toBe(0)
+    await download.saveAs(path)
+    expect(await download.failure()).toBeNull()
+    expect(download.suggestedFilename()).toMatch(/手动录制.*\.mkv$/)
+    const probe = JSON.parse(
+      execFileSync(
+        "ffprobe",
+        ["-v", "error", "-show_streams", "-show_packets", "-of", "json", path],
+        { encoding: "utf8" }
+      )
+    ) as {
+      streams: { codec_name: string }[]
+      packets: { codec_type: string; pts_time: string; duration_time: string }[]
+    }
+    expect(probe.streams.map((stream) => stream.codec_name)).toEqual([
+      "h264",
+      "pcm_alaw",
+    ])
+    const video = probe.packets.filter(
+      (packet) => packet.codec_type === "video"
+    )
+    expect(video.length).toBeGreaterThan(1)
+    expect(
+      Math.max(
+        ...video.map(
+          (packet) => Number(packet.pts_time) + Number(packet.duration_time)
+        )
+      )
+    ).toBeCloseTo(3, 2)
+    execFileSync(
+      "ffmpeg",
+      ["-v", "error", "-xerror", "-i", path, "-f", "null", "-"],
+      { encoding: "utf8" }
+    )
+    expect(source.requests).toEqual([{ path: "/live", body: { track: "101" } }])
+    await page
+      .getByRole("button", { name: "录制与下载任务", exact: true })
+      .click()
+    await expect(page.locator(".save-task-item")).toHaveAttribute(
+      "data-state",
+      "complete"
+    )
+  } finally {
+    await download.delete()
+    await rm(path, { force: true })
+  }
+})
+
 test("a browser disk failure is reported and releases its media connection", async ({
   page,
   context,
@@ -703,13 +789,24 @@ test("a browser disk failure is reported and releases its media connection", asy
       ][] = []
       private ready = false
       constructor(url: string | URL, options?: WorkerOptions) {
-        const script = `const nativeFetch = self.fetch.bind(self); self.fetch = (input, init) => nativeFetch(typeof input === "string" ? new URL(input, ${JSON.stringify(new URL(String(url)).origin)}).href : input, init); FileSystemFileHandle.prototype.createWritable = async function() { throw new DOMException("测试磁盘空间不足", "QuotaExceededError") }; importScripts(${JSON.stringify(String(url))}); self.postMessage({ __diskTestReady: true });`
-        super(
-          URL.createObjectURL(new Blob([script], { type: "text/javascript" })),
-          { ...options, type: undefined }
+        const source = new URL(String(url), location.href)
+        const load =
+          options?.type === "module"
+            ? `await import(${JSON.stringify(source.href)});`
+            : `importScripts(${JSON.stringify(source.href)});`
+        const script = `const nativeFetch = self.fetch.bind(self); self.fetch = (input, init) => nativeFetch(typeof input === "string" ? new URL(input, ${JSON.stringify(source.origin)}).href : input, init); FileSystemFileHandle.prototype.createWritable = async function() { throw new DOMException("测试磁盘空间不足", "QuotaExceededError") }; ${load} self.postMessage({ __diskTestReady: true });`
+        const bootstrap = URL.createObjectURL(
+          new Blob([script], { type: "text/javascript" })
         )
+        // Turbopack reads the entry chunks from the worker location's hash.
+        // Preserve it when the real entry is loaded through this fault shim.
+        super(`${bootstrap}${source.hash}`, options)
+        this.addEventListener("error", () => URL.revokeObjectURL(bootstrap), {
+          once: true,
+        })
         this.addEventListener("message", (event) => {
           if (!event.data?.__diskTestReady) return
+          URL.revokeObjectURL(bootstrap)
           this.ready = true
           for (const [value, transfer] of this.waiting)
             NativeWorker.prototype.postMessage.call(

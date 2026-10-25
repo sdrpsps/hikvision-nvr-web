@@ -28,6 +28,20 @@
 
 ## 故障观察与已实施修复
 
+### 本轮回归：下载停在准备状态
+
+用户报告 Chrome 正常选择位置、Safari 一直“准备录制”后，在原生 Safari 的实际应用中复现：下载列表显示“正在准备下载”，任务保持 0 B，最终提示“等待浏览器写入磁盘超时，保存已中断。”。仅记录阶段与计数的临时观测确认 `register`、`registered`、`started` 和媒体 Worker `ready` 均成功，媒体已读取 131,115 B；下载端收到首次 `pull`，但未收到媒体写入端的 `writer-ready`。因此本次故障发生在端口交接之后，不能归为选择位置弹窗未出现或设备没有数据。
+
+用同源 4 KiB 合成数据进行时序对照：发送端在 `postMessage` 后立即关闭已转交的 `port2` 时，可以完成写入；等待 `registered` 回执后再关闭同一个旧句柄时，原生 Safari 不再将写入端的 `writer-ready` 送达 SW，复现实际应用的等待状态。原代码的 `finally` 正是在回执后执行 `channel.port2.close()`。修复为：成功转交后由接收端拥有端口，仅在结构化克隆抛错、没有转交成功时关闭发送端句柄；取消和失败仍通过独立 `release-save` 通道释放远端与 iframe。此前“关闭旧句柄”的成功对照没有覆盖这次确认失败的关闭时序，不能证明所有时序都安全。
+
+同时给浏览器的 SW 注册等待增加 15 秒超时和立即取消，防止注册 Promise 不结束时永久停在准备状态；迟到的注册结果不会启动已取消的下载。Safari 入口改为“开始录制”，并说明保存到浏览器下载位置；Chrome 保留“选择位置并录制”。Safari 是否先显示“另存为”由浏览器下载设置决定，应用不再承诺弹出 Chrome 的文件选择器。
+
+**已验证（实机）**：刷新载入修复后，原生 Safari 实际应用进入“录制中”，观察到 22 秒 / 5.3 MiB，手动停止后在下载列表确认成品完成（7.5 MB）。实际文件为 7,503,079 B，HEVC 2560×1440、G.711 A-law 8 kHz 单声道；900 个视频包与 543 个音频包均覆盖 0→36.00 秒。`ffprobe` 与 FFmpeg `-xerror` 全片音视频解码通过，退出码 0、错误输出 0 行；检查时没有 FFmpeg 进程。失败诊断留下的两个空下载已在原生下载列表停止，临时观测代码已从仓库移除。本次没有重做 Safari 长时间、多路录制或文件内选区实机验收。
+
+**已验证（自动测试）**：`pnpm test` 16 文件 / 212 项通过；`pnpm typecheck`、`pnpm lint`、改动源码/测试的 Prettier 检查、`git diff --check` 和 `pnpm build` 通过。`TEST_BASE_URL=http://localhost:3000 NVR_INTEGRATION=0 RUN_NVR_SAVE_TESTS=0 RUN_NVR_LONG_SAVE_TESTS=0 pnpm exec playwright test tests/browser/saves.spec.ts tests/browser/stream-save.spec.ts --workers=1 --output=/private/tmp/hikvision-safari-start-final` 20/20 通过（44.6 秒），仅使用模拟接口与合成媒体，包括新增无文件选择器的应用原生下载与文件完整性核验。Chrome 在沙箱内启动时 SIGABRT，最终回归在普通本机环境执行；磁盘失败测试的 Worker 注入适配原始模块类型及 Turbopack 启动 hash，保留原有磁盘错误与连接释放断言。
+
+以下早期记录保留当时的观测，不作为本轮回归已经不存在的依据。
+
 早期已确认 Safari 处于安全上下文，Service Worker 注册、激活和 MessageChannel 登记成功，但生产入口曾等待 `started` 超时；该通知由响应流首次 `pull` 发送，早期失败发生在启动媒体 Worker、读取媒体源之前。随后 Mac 锁屏，中断原生诊断；解锁后恢复分层检查。
 
 原生 Safari 的独立生产 SW 对照只增加 fetch/stream 阶段观测，保持 `highWaterMark=0` 和隐藏 iframe，已下载完整 32,768 B 并核对 hash，下载列表显示完成。实际应用随后出现另一种失败：保存目的地已返回，任务仍为 0 B，最终明确报告“等待浏览器写入磁盘超时，保存已中断。”；这与早期 `started` 超时发生在不同阶段。
