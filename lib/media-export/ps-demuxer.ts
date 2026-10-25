@@ -1,11 +1,5 @@
-import { AnnexBVideo, lengthPrefixed, nalBoundary } from "./nal"
-import {
-  concatBytes,
-  MAX_MEDIA_BUFFER,
-  u16,
-  type EncodedPacket,
-  type VideoCodec,
-} from "./types"
+import { PsVideoAssembler } from "./ps-video"
+import { concatBytes, MAX_MEDIA_BUFFER, u16, type EncodedPacket } from "./types"
 
 // private_stream_1 can carry mapped audio or unrelated private metadata.
 const UNSUPPORTED_AUDIO_STREAM_TYPES = new Set([
@@ -39,22 +33,22 @@ function packetStart(bytes: Uint8Array, from = 0) {
 // packet boundaries. Only encoded PES media enters the output.
 export class MpegPsDemuxer {
   private pending = new Uint8Array(0)
-  private video = new AnnexBVideo()
+  private video = new PsVideoAssembler(
+    () => {
+      const type = [...this.streamTypes.values()].find(
+        (value) => value === 0x1b || value === 0x24
+      )
+      return type === 0x24 ? "hevc" : type === 0x1b ? "h264" : undefined
+    },
+    (pts) => {
+      this.firstPts ??= pts
+      this.mediaPackets++
+    }
+  )
   private streamTypes = new Map<number, number>()
-  private videoPending = new Uint8Array(0)
-  private videoPosition = 0
-  private videoReceived = 0
-  private timeMarkers: { offset: number; pts: number; dts?: number }[] = []
-  private nextVideoTime?: { pts: number; dts?: number }
-  private currentVideoTime?: { pts: number; dts?: number }
-  private lastVideoTime?: { pts: number; dts?: number }
-  private currentNals: Uint8Array[] = []
-  private currentVideoBytes = 0
-  private hasVideoSlice = false
   private timestampReference?: number
   private mediaPackets = 0
   private scannedBytes = 0
-  private frameDuration = 0.04
   audioUnsupported = false
   firstPts?: number
 
@@ -67,8 +61,7 @@ export class MpegPsDemuxer {
 
   finish(): EncodedPacket[] {
     const result = this.parse(true)
-    this.parseVideo(result, true)
-    this.flushVideo(result)
+    this.video.finish(result)
     if (!this.mediaPackets)
       throw new Error("未找到可保存的 H.264 / H.265 录像。")
     return result
@@ -177,19 +170,7 @@ export class MpegPsDemuxer {
       type = this.streamTypes.get(id)
     const isVideo = (id >= 0xe0 && id <= 0xef) || type === 0x1b || type === 0x24
     if (isVideo) {
-      if (presentation !== undefined)
-        this.timeMarkers.push({
-          offset: this.videoReceived,
-          pts: presentation,
-          dts: decode,
-        })
-      if (this.timeMarkers.length > 1024)
-        throw new Error("录像视频缺少有效的帧边界。")
-      if (this.videoPending.length + payload.length > MAX_MEDIA_BUFFER)
-        throw new Error("录像视频帧超过浏览器缓冲上限。")
-      this.videoPending = concatBytes(this.videoPending, payload)
-      this.videoReceived += payload.length
-      this.parseVideo(result, false)
+      this.video.push(payload, presentation, decode, result)
     } else if (type === 0x90 || type === 0x91) {
       if (presentation === undefined || !payload.length) return
       const codec = type === 0x90 ? "alaw" : "ulaw"
@@ -210,109 +191,5 @@ export class MpegPsDemuxer {
         UNSUPPORTED_AUDIO_STREAM_TYPES.has(type))
     )
       this.audioUnsupported = true
-  }
-
-  private parseVideo(result: EncodedPacket[], final: boolean) {
-    const starts: { prefix: number; data: number }[] = []
-    for (let i = 0; i + 3 <= this.videoPending.length; i++) {
-      if (this.videoPending[i] || this.videoPending[i + 1]) continue
-      if (this.videoPending[i + 2] === 1) {
-        starts.push({ prefix: i, data: i + 3 })
-        i += 2
-      } else if (
-        this.videoPending[i + 2] === 0 &&
-        this.videoPending[i + 3] === 1
-      ) {
-        starts.push({ prefix: i, data: i + 4 })
-        i += 3
-      }
-    }
-    const complete = final ? starts.length : Math.max(0, starts.length - 1)
-    for (let i = 0; i < complete; i++) {
-      const start = starts[i],
-        end = starts[i + 1]?.prefix ?? this.videoPending.length
-      const absolute = this.videoPosition + start.prefix
-      while (
-        this.timeMarkers.length &&
-        this.timeMarkers[0].offset <= absolute
-      ) {
-        const marker = this.timeMarkers.shift()!
-        this.nextVideoTime = { pts: marker.pts, dts: marker.dts }
-      }
-      const nal = this.videoPending.slice(start.data, end)
-      if (nal.length) this.readNal(nal, result)
-    }
-    const consumed = final
-      ? this.videoPending.length
-      : (starts[complete]?.prefix ?? Math.max(0, this.videoPending.length - 3))
-    this.videoPending = this.videoPending.slice(consumed)
-    this.videoPosition += consumed
-  }
-
-  private readNal(nal: Uint8Array, result: EncodedPacket[]) {
-    const type = [...this.streamTypes.values()].find(
-      (value) => value === 0x1b || value === 0x24
-    )
-    const hint: VideoCodec | undefined =
-      type === 0x24 ? "hevc" : type === 0x1b ? "h264" : undefined
-    const codec = this.video.inspect([nal], hint)?.codec
-    if (codec) {
-      const boundary = nalBoundary(nal, codec)
-      if (this.hasVideoSlice && (boundary.first || boundary.prefix))
-        this.flushVideo(result)
-      if (boundary.slice && !this.hasVideoSlice) {
-        const duration = this.video.config?.frameDuration ?? this.frameDuration
-        this.currentVideoTime =
-          this.nextVideoTime ??
-          (this.lastVideoTime && {
-            pts: this.lastVideoTime.pts + duration,
-            dts:
-              this.lastVideoTime.dts === undefined
-                ? undefined
-                : this.lastVideoTime.dts + duration,
-          })
-        this.nextVideoTime = undefined
-        this.hasVideoSlice = true
-      }
-    }
-    this.currentNals.push(nal)
-    this.currentVideoBytes += nal.length
-    if (this.currentVideoBytes > MAX_MEDIA_BUFFER)
-      throw new Error("录像视频帧超过浏览器缓冲上限。")
-  }
-
-  private flushVideo(result: EncodedPacket[]) {
-    const nals = this.currentNals,
-      time = this.currentVideoTime
-    this.currentNals = []
-    this.currentVideoBytes = 0
-    this.currentVideoTime = undefined
-    this.hasVideoSlice = false
-    if (!time || !nals.length) return
-    const info = this.video.inspect(nals)
-    if (!info?.hasFrame) return
-    if (!info.config) {
-      if (info.keyframe) throw new Error("录像关键帧缺少完整的视频参数集。")
-      return
-    }
-    if (this.lastVideoTime) {
-      const delta =
-        (time.dts ?? time.pts) -
-        (this.lastVideoTime.dts ?? this.lastVideoTime.pts)
-      if (delta > 0.000001 && delta < 0.5) this.frameDuration = delta
-    }
-    this.firstPts ??= time.pts
-    result.push({
-      kind: "video",
-      codec: info.codec,
-      pts: time.pts,
-      dts: time.dts,
-      duration: this.frameDuration,
-      keyframe: info.keyframe,
-      data: lengthPrefixed(nals),
-      video: info.config,
-    })
-    this.lastVideoTime = time
-    this.mediaPackets++
   }
 }

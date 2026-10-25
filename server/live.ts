@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { splitFragmentedMp4 } from "./mp4"
-import { copiedAudio } from "./live-audio"
+import { copiedAudio, CopiedAudioParser } from "./live-audio"
 
 export const LIVE_TTL_MS = 10 * 60_000
 export const LIVE_IDLE_MS = 30_000
@@ -202,53 +202,28 @@ export class LiveSessions {
         fail("MEDIA_TOOL_UNAVAILABLE", "无法启动 FFmpeg 实时换封装工具。")
       )
       child.on("close", () => fail())
-      let audioPending = Buffer.alloc(0),
-        audioInit = Buffer.alloc(0),
-        audioFragment = Buffer.alloc(0),
-        audioSequence = 0
+      const audioParser = new CopiedAudioParser()
+      let audioSequence = 0
       const audioPipe = child.stdio?.[3]
       if (audioPipe && "on" in audioPipe)
         audioPipe.on("data", (chunk: Buffer) => {
           if (!this.sessions.has(id) || session.audioStatus === "unsupported")
             return
           try {
-            if (audioPending.length + chunk.length > 256 * 1024)
-              throw new Error()
-            audioPending = Buffer.concat([audioPending, chunk])
-            while (audioPending.length >= 8) {
-              const size = audioPending.readUInt32BE(0)
-              if (size < 8 || size > 256 * 1024) throw new Error()
-              if (audioPending.length < size) break
-              const box = audioPending.subarray(0, size),
-                type = box.toString("ascii", 4, 8)
-              audioPending = audioPending.subarray(size)
-              if (type === "ftyp" || type === "moov") {
-                if (audioInit.length + box.length > 64 * 1024) throw new Error()
-                audioInit = Buffer.concat([audioInit, box])
-              } else if (type === "moof") audioFragment = box
-              else if (type === "mdat") {
-                const audio = copiedAudio(
-                  audioInit,
-                  Buffer.concat([audioFragment, box])
-                )
-                session.audio.push({ ...audio, sequence: audioSequence++ })
-                session.audioStatus = "available"
-                audioFragment = Buffer.alloc(0)
-                while (
-                  session.audio.length > 80 ||
-                  session.audio.reduce(
-                    (sum, item) => sum + item.data.length,
-                    0
-                  ) >
-                    512 * 1024
-                )
-                  session.audio.shift()
-              }
+            for (const audio of audioParser.push(chunk)) {
+              session.audio.push({ ...audio, sequence: audioSequence++ })
+              session.audioStatus = "available"
+              while (
+                session.audio.length > 80 ||
+                session.audio.reduce((sum, item) => sum + item.data.length, 0) >
+                  512 * 1024
+              )
+                session.audio.shift()
             }
           } catch {
             session.audioStatus = "unsupported"
             session.audio = []
-            audioPending = audioInit = audioFragment = Buffer.alloc(0)
+            audioParser.reset()
           }
         })
       child.stdout?.on("data", (chunk: Buffer) => {

@@ -3,20 +3,10 @@ import { Temporal } from "@js-temporal/polyfill"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { IsapiClient } from "./isapi"
+import { ChannelsService } from "./channels"
 import { coverageAndGaps, dayRange, recordingSearchTime } from "./time"
-import {
-  buildSearch,
-  renameInputProxyXml,
-  parseInputProxyName,
-  assertDeviceWriteSuccess,
-  parseDevice,
-  parseInputProxyNames,
-  parseSearch,
-  parseTracks,
-  type RawSegment,
-} from "./xml"
-import { renameChannelSchema, trackIdSchema } from "../shared/contracts"
-import type { Channel, Recordings } from "../shared/contracts"
+import { buildSearch, parseDevice, parseSearch, type RawSegment } from "./xml"
+import type { Recordings } from "../shared/contracts"
 
 export function validatePlaybackUri(uri: string, config: NvrConfig) {
   try {
@@ -43,12 +33,8 @@ export function validatePlaybackUri(uri: string, config: NvrConfig) {
 }
 export class NvrService {
   readonly client: IsapiClient
+  private readonly channelService: ChannelsService
   private key = randomBytes(32)
-  private channelsCache?: {
-    expires: number
-    data: Channel[]
-  }
-  private channelsPending?: Promise<Channel[]>
   private cache = new Map<string, { expires: number; result: Recordings }>()
   private pending = new Map<string, Promise<Recordings>>()
   private active = 0
@@ -57,97 +43,25 @@ export class NvrService {
     client?: IsapiClient
   ) {
     this.client = client ?? new IsapiClient(config)
+    this.channelService = new ChannelsService(this.client)
   }
   device() {
     return this.client.request("/ISAPI/System/deviceInfo").then(parseDevice)
   }
-  async channels() {
-    if (this.channelsCache && this.channelsCache.expires > Date.now())
-      return this.channelsCache.data
-    if (this.channelsPending) return this.channelsPending
-    this.channelsPending = this.loadChannels().finally(() => {
-      this.channelsPending = undefined
-    })
-    return this.channelsPending
+  channels() {
+    return this.channelService.list()
   }
-  private async loadChannels(): Promise<Channel[]> {
-    const tracks = parseTracksSafe(
-      await this.client.request("/ISAPI/ContentMgmt/record/tracks")
-    )
-    let names = new Map<string, string>()
-    if (tracks.some((track) => track.sourceChannelId)) {
-      try {
-        names = parseInputProxyNames(
-          await this.client.request("/ISAPI/ContentMgmt/InputProxy/channels")
-        )
-      } catch {
-        // Names enrich the existing track list; unsupported/forbidden/timeout
-        // responses must not prevent querying or playing otherwise valid tracks.
-      }
-    }
-    const data = tracks.map(({ sourceChannelId, ...track }) => ({
-      ...track,
-      name: (sourceChannelId && names.get(sourceChannelId)) || track.name,
-    }))
-    this.channelsCache = { data, expires: Date.now() + 20000 }
-    return data
-  }
-  private renaming = false
-  async renameChannel(
+  renameChannel(
     trackId: string,
     input: { name: string },
     signal?: AbortSignal
   ) {
-    trackId = trackIdSchema.parse(trackId)
-    const { name } = renameChannelSchema.parse(input)
-    if (this.renaming)
-      throw new AppError("NVR_BUSY", 409, "正在修改通道名称，请稍后重试。")
-    this.renaming = true
-    try {
-      const tracks = parseTracksSafe(
-        await this.client.request(
-          "/ISAPI/ContentMgmt/record/tracks",
-          undefined,
-          signal
-        )
-      )
-      const matches = tracks.filter((track) => track.id === trackId)
-      if (matches.length !== 1)
-        throw new AppError("TRACK_NOT_FOUND", 404, "设备中不存在此录像轨道。")
-      const source = matches[0].sourceChannelId
-      if (!source)
-        throw new AppError(
-          "CHANNEL_MAPPING_MISSING",
-          409,
-          "设备未提供通道映射，无法安全修改名称。"
-        )
-      const path = `/ISAPI/ContentMgmt/InputProxy/channels/${source}`
-      const before = await this.client.request(path, undefined, signal)
-      const body = renameInputProxyXml(before, source, name)
-      if (parseInputProxyName(before, source) !== name) {
-        assertDeviceWriteSuccess(
-          await this.client.request(path, body, signal, "PUT")
-        )
-      }
-      // Read back from the device: HTTP 200 alone does not prove persistence.
-      if (
-        parseInputProxyName(
-          await this.client.request(path, undefined, signal),
-          source
-        ) !== name
-      )
-        throw new AppError(
-          "NVR_RENAME_UNCONFIRMED",
-          502,
-          "设备名称尚未确认，请刷新通道核对后再操作。"
-        )
-      return { id: trackId, name }
-    } finally {
-      // Drain pre-write reads before invalidation so they cannot republish old names.
-      await this.channelsPending?.catch(() => {})
-      this.channelsCache = undefined
-      this.renaming = false
-    }
+    return this.channelService.rename(trackId, input, signal)
+  }
+  async requireChannel(trackId: string) {
+    if (!(await this.channels()).some((channel) => channel.id === trackId))
+      throw new AppError("CHANNEL_NOT_FOUND", 404, "设备未返回此通道。")
+    return trackId
   }
   async queryRaw(
     trackId: string,
@@ -407,12 +321,5 @@ export class NvrService {
       .finally(() => this.pending.delete(key))
     this.pending.set(key, query)
     return query
-  }
-}
-function parseTracksSafe(xml: string) {
-  try {
-    return parseTracks(xml)
-  } catch {
-    throw new AppError("NVR_INVALID_XML", 502, "设备轨道响应结构无效。")
   }
 }

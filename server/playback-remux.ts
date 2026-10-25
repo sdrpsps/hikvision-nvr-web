@@ -6,7 +6,7 @@ import { AppError } from "./errors"
 import { splitFragmentedMp4 } from "./mp4"
 import { remuxArguments, type PreviewMedia } from "./remux"
 import type { NvrConfig } from "./config"
-import { copiedAudio } from "./live-audio"
+import { copiedAudio, CopiedAudioParser } from "./live-audio"
 
 export const MAX_PLAYBACK_SOURCE_BYTES = 4 * 1024 ** 3
 export const MAX_FRAGMENT_BYTES = 16 * 1024 ** 2
@@ -83,38 +83,15 @@ export const recordingFragments: RecordingFragments = async function* (
     let audioError: unknown
     const audioPipe = childProcess.stdio[3] as Readable
     const audioTask = (async () => {
-      let pending = Buffer.alloc(0),
-        init = Buffer.alloc(0),
-        fragment = Buffer.alloc(0)
+      const audioParser = new CopiedAudioParser({ skipEmptyMedia: true })
       let supported = true,
         received = false
       for await (const raw of audioPipe) {
         if (!onAudio || !supported) continue
         try {
-          const chunk = raw as Buffer
-          if (pending.length + chunk.length > 256 * 1024) throw new Error()
-          pending = Buffer.concat([pending, chunk])
-          while (pending.length >= 8) {
-            const size = pending.readUInt32BE(0)
-            if (size < 8 || size > 256 * 1024) throw new Error()
-            if (pending.length < size) break
-            const box = pending.subarray(0, size),
-              type = box.toString("ascii", 4, 8)
-            pending = pending.subarray(size)
-            if (type === "ftyp" || type === "moov") {
-              if (init.length + size > 64 * 1024) throw new Error()
-              init = Buffer.concat([init, box])
-            } else if (type === "moof") fragment = box
-            else if (type === "mdat") {
-              if (size === 8) {
-                fragment = Buffer.alloc(0)
-                continue
-              }
-              const chunk = copiedAudio(init, Buffer.concat([fragment, box]))
-              await onAudio(chunk)
-              received = true
-              fragment = Buffer.alloc(0)
-            }
+          for (const chunk of audioParser.push(raw as Buffer)) {
+            await onAudio(chunk)
+            received = true
           }
         } catch (error) {
           if (
@@ -127,7 +104,7 @@ export const recordingFragments: RecordingFragments = async function* (
           )
             throw error
           supported = false
-          pending = init = fragment = Buffer.alloc(0)
+          audioParser.reset()
           await onAudio({ status: "unsupported" })
         }
       }

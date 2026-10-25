@@ -66,3 +66,39 @@ export function copiedAudio(init: Buffer, fragment: Buffer) {
     data: Buffer.from(mdat.data),
   }
 }
+
+// Both live preview and playback receive the same copied audio pipe. Keep
+// incremental container state here; callers own delivery, retention and errors.
+export class CopiedAudioParser {
+  private pending = Buffer.alloc(0)
+  private init = Buffer.alloc(0)
+  private fragment = Buffer.alloc(0)
+
+  constructor(private options: { skipEmptyMedia?: boolean } = {}) {}
+
+  *push(chunk: Buffer): Generator<ReturnType<typeof copiedAudio>> {
+    if (this.pending.length + chunk.length > 256 * 1024) throw new Error()
+    this.pending = Buffer.concat([this.pending, chunk])
+    while (this.pending.length >= 8) {
+      const size = this.pending.readUInt32BE(0)
+      if (size < 8 || size > 256 * 1024) throw new Error()
+      if (this.pending.length < size) break
+      const box = this.pending.subarray(0, size)
+      const type = box.toString("ascii", 4, 8)
+      this.pending = this.pending.subarray(size)
+      if (type === "ftyp" || type === "moov") {
+        if (this.init.length + size > 64 * 1024) throw new Error()
+        this.init = Buffer.concat([this.init, box])
+      } else if (type === "moof") this.fragment = box
+      else if (type === "mdat") {
+        if (!(this.options.skipEmptyMedia && size === 8))
+          yield copiedAudio(this.init, Buffer.concat([this.fragment, box]))
+        this.fragment = Buffer.alloc(0)
+      }
+    }
+  }
+
+  reset() {
+    this.pending = this.init = this.fragment = Buffer.alloc(0)
+  }
+}

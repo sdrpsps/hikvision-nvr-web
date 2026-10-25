@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { describe, it, expect } from "vitest"
-import { copiedAudio } from "../server/live-audio"
+import { copiedAudio, CopiedAudioParser } from "../server/live-audio"
 import { mp4Boxes } from "../server/mp4"
 import { decodeG711 } from "../lib/g711"
 
@@ -65,4 +65,49 @@ describe("copied G.711 audio", () => {
     unsupported.write("mp4a", unsupported.indexOf("alaw"), "ascii")
     expect(() => copiedAudio(unsupported, fragments[0])).toThrow()
   })
+})
+
+describe("incremental copied audio pipe", () => {
+  it.each([1, 19, 4096])(
+    "preserves packets and timestamps when pipe chunks contain %i bytes",
+    (chunkSize) => {
+      const parser = new CopiedAudioParser()
+      const packets: ReturnType<typeof copiedAudio>[] = []
+      for (let offset = 0; offset < file.length; offset += chunkSize)
+        packets.push(...parser.push(file.subarray(offset, offset + chunkSize)))
+      expect(packets).toEqual(
+        fragments.map((fragment) => copiedAudio(init, fragment))
+      )
+    }
+  )
+
+  it("preserves playback's empty-media policy without relaxing live validation", () => {
+    const empty = Buffer.alloc(8)
+    empty.writeUInt32BE(8)
+    empty.write("mdat", 4, "ascii")
+    const live = new CopiedAudioParser()
+    const playback = new CopiedAudioParser({ skipEmptyMedia: true })
+    expect([...live.push(init)]).toEqual([])
+    expect([...playback.push(init)]).toEqual([])
+    expect(() => [...live.push(empty)]).toThrow()
+    expect([...playback.push(empty)]).toEqual([])
+    expect([...playback.push(fragments[0])]).toEqual([
+      copiedAudio(init, fragments[0]),
+    ])
+  })
+
+  it.each(["box", "init"])(
+    "bounds %s data and discards parser state after failure",
+    (kind) => {
+      const parser = new CopiedAudioParser()
+      const invalid = Buffer.alloc(kind === "box" ? 8 : 64 * 1024 + 1)
+      invalid.writeUInt32BE(kind === "box" ? 256 * 1024 + 1 : invalid.length)
+      invalid.write("ftyp", 4, "ascii")
+      expect(() => [...parser.push(invalid)]).toThrow()
+      parser.reset()
+      expect([...parser.push(Buffer.concat([init, fragments[0]]))]).toEqual([
+        copiedAudio(init, fragments[0]),
+      ])
+    }
+  )
 })
