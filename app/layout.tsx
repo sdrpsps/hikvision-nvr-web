@@ -1,3 +1,4 @@
+import { NuqsAdapter } from "nuqs/adapters/next/app"
 import { Geist, Geist_Mono } from "next/font/google"
 
 import "./globals.css"
@@ -41,7 +42,9 @@ export default function RootLayout({
         <ThemeProvider>
           <QueryProvider>
             <BrowserSaveProvider>
-              <ConsoleScrollArea>{children}</ConsoleScrollArea>
+              <NuqsAdapter>
+                <ConsoleScrollArea>{children}</ConsoleScrollArea>
+              </NuqsAdapter>
             </BrowserSaveProvider>
           </QueryProvider>
           <Toaster />

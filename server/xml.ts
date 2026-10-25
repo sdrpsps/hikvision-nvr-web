@@ -1,7 +1,7 @@
 import { XMLBuilder, XMLParser, XMLValidator } from "fast-xml-parser"
 import { z } from "zod"
 import { trackIdSchema } from "../shared/contracts"
-import { invalidXml } from "./errors"
+import { AppError, invalidXml } from "./errors"
 import { recordingInstant, type RecordingTimeOptions } from "./time"
 
 const parser = new XMLParser({
@@ -172,4 +172,47 @@ export function parseDownloadCapabilities(xml: string) {
     byTime: data.isSupportDownloadbyTime === "true",
     byFileName: data.isSupportDownloadbyFileName === "true",
   }
+}
+
+// Preserve element order, attributes, namespaces and every unrelated setting.
+export function renameInputProxyXml(xml: string, id: string, name: string) {
+  const data = root(xml, "InputProxyChannel")
+  if (data.id !== id || typeof data.name !== "string") throw invalidXml()
+  const options = {
+    preserveOrder: true,
+    ignoreAttributes: false,
+    parseTagValue: false,
+    trimValues: false,
+  }
+  const nodes = new XMLParser(options).parse(xml) as Record<string, unknown>[]
+  const local = (key: string) => key.split(":").at(-1)
+  const roots = nodes.flatMap((node) =>
+    Object.keys(node)
+      .filter((key) => local(key) === "InputProxyChannel")
+      .map((key) => ({ node, key }))
+  )
+  if (roots.length !== 1) throw invalidXml()
+  const children = roots[0].node[roots[0].key] as Record<string, unknown>[]
+  const names = children.flatMap((node) =>
+    Object.keys(node)
+      .filter((key) => local(key) === "name")
+      .map((key) => ({ node, key }))
+  )
+  if (names.length !== 1) throw invalidXml()
+  names[0].node[names[0].key] = [{ "#text": name }]
+  return new XMLBuilder(options).build(nodes) as string
+}
+export function parseInputProxyName(xml: string, id: string) {
+  const data = root(xml, "InputProxyChannel")
+  if (data.id !== id) throw invalidXml()
+  return text(data.name, "").trim()
+}
+export function assertDeviceWriteSuccess(xml: string) {
+  const data = root(xml, "ResponseStatus")
+  if (data.statusCode !== "1" || data.statusString !== "OK")
+    throw new AppError(
+      "NVR_WRITE_REJECTED",
+      502,
+      "设备未接受名称修改，请检查名称限制和配置权限。"
+    )
 }

@@ -1,6 +1,19 @@
 import { z } from "zod"
 
 export const trackIdSchema = z.string().regex(/^[1-9]\d{0,8}$/)
+// Conservative UTF-8 limit for older NVR firmware; reject XML-invalid controls.
+export const channelNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(32)
+  .refine(
+    (name) =>
+      new TextEncoder().encode(name).length <= 32 &&
+      !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\ufffe\uffff]/u.test(name),
+    "名称需为 1–32 个 UTF-8 字节，且不能包含控制字符。"
+  )
+export const renameChannelSchema = z.strictObject({ name: channelNameSchema })
 export const dateSchema = z.iso.date()
 export const recordingsQuerySchema = z.strictObject({
   track: trackIdSchema,

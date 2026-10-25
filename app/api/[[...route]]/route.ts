@@ -10,3 +10,5 @@ export function GET(request: Request) {
 
 export const POST = GET
 export const DELETE = GET
+
+export const PUT = GET

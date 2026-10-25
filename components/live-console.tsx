@@ -1,5 +1,7 @@
 "use client"
 
+import { useQueryStates } from "nuqs"
+import { liveUrlParsers } from "@/lib/url-state"
 import { useCallback, useRef, useState } from "react"
 import { useQueryErrorToast } from "@/hooks/use-query-error-toast"
 import {
@@ -12,6 +14,7 @@ import {
   VideoIcon,
 } from "lucide-react"
 import { useChannels } from "@/hooks/use-api"
+import { RenameChannel } from "@/components/rename-channel"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -46,15 +49,27 @@ import {
 } from "@/components/video-wall"
 
 export function LiveConsole() {
-  const [layout, setLayout] = useState<WallLayout>(4)
-  const [selected, setSelected] = useState(0)
-  const [assignments, setAssignments] = useState<Record<number, string>>({})
+  const [urlState, setUrlState] = useQueryStates(liveUrlParsers, {
+    shallow: true,
+    scroll: false,
+  })
+  const layout = Number(urlState.layout) as WallLayout
+  const selected = Math.min(urlState.window, layout) - 1
+  const assignments = urlState.slots
+  const sidebarOpen = urlState.sidebar
+  function setSelected(index: number) {
+    void setUrlState({ window: index + 1 })
+  }
+  function setAssignments(
+    update: (old: Record<number, string>) => Record<number, string>
+  ) {
+    void setUrlState((old) => ({ slots: update(old.slots) }))
+  }
   const channelsQuery = useChannels()
   const channels = channelsQuery.data?.channels
   const error = channelsQuery.error?.message
   useQueryErrorToast(channelsQuery, "通道读取失败")
   const [generation, setGeneration] = useState(0)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activity, setActivity] = useState<Record<number, boolean>>({})
   const players = useRef(new Map<number, StreamPlayerHandle>())
   const updateActivity = useCallback((index: number, active: boolean) => {
@@ -89,7 +104,7 @@ export function LiveConsole() {
               aria-controls="live-channels"
               onClick={(event) => {
                 event.currentTarget.focus()
-                setSidebarOpen((open) => !open)
+                void setUrlState((old) => ({ sidebar: !old.sidebar }))
               }}
             >
               {sidebarOpen ? (
@@ -105,8 +120,10 @@ export function LiveConsole() {
             <WallLayoutControl
               value={layout}
               onChange={(value) => {
-                setLayout(value)
-                setSelected((old) => Math.min(old, value - 1))
+                void setUrlState({
+                  layout: String(value) as typeof urlState.layout,
+                  window: Math.min(selected + 1, value),
+                })
               }}
             />
             <Button
@@ -214,7 +231,7 @@ export function LiveConsole() {
               >
                 <ul className="channel-list">
                   {channels?.map((channel) => (
-                    <li key={channel.id}>
+                    <li key={channel.id} className="flex items-center gap-1">
                       <Button
                         type="button"
                         variant={
@@ -222,7 +239,7 @@ export function LiveConsole() {
                             ? "secondary"
                             : "ghost"
                         }
-                        className="h-auto w-full justify-start py-2.5"
+                        className="h-auto min-w-0 flex-1 justify-start py-2.5"
                         title={`通道 ${channel.id}`}
                         aria-pressed={trackFor(selected) === channel.id}
                         onClick={() =>
@@ -238,6 +255,7 @@ export function LiveConsole() {
                         />
                         <span className="truncate">{channel.name}</span>
                       </Button>
+                      <RenameChannel channel={channel} />
                     </li>
                   ))}
                 </ul>

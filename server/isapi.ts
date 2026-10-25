@@ -11,22 +11,28 @@ export class IsapiClient {
   async request(
     path: string,
     body?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    operation?: "PUT"
   ): Promise<string> {
+    const channelPath =
+      /^\/ISAPI\/ContentMgmt\/InputProxy\/channels\/[1-9]\d{0,8}$/.test(path)
     if (
-      ![
-        "/ISAPI/System/deviceInfo",
-        "/ISAPI/ContentMgmt/record/tracks",
-        "/ISAPI/ContentMgmt/InputProxy/channels",
-        "/ISAPI/ContentMgmt/search",
-        "/ISAPI/System/time",
-        "/ISAPI/ContentMgmt/download/capabilities",
-      ].includes(path)
+      (operation && (!channelPath || body === undefined)) ||
+      (channelPath && body !== undefined && operation !== "PUT") ||
+      (!channelPath &&
+        ![
+          "/ISAPI/System/deviceInfo",
+          "/ISAPI/ContentMgmt/record/tracks",
+          "/ISAPI/ContentMgmt/InputProxy/channels",
+          "/ISAPI/ContentMgmt/search",
+          "/ISAPI/System/time",
+          "/ISAPI/ContentMgmt/download/capabilities",
+        ].includes(path))
     ) {
       throw new AppError("INVALID_DEVICE_PATH", 400, "不支持的设备查询。")
     }
     const url = `${this.config.NVR_HTTP_SCHEME}://${this.config.NVR_HOST}:${this.config.NVR_HTTP_PORT}${path}`
-    const method = body === undefined ? "GET" : "POST"
+    const method = operation ?? (body === undefined ? "GET" : "POST")
     const controller = new AbortController()
     const timeout = setTimeout(
       () => controller.abort(),
@@ -75,11 +81,11 @@ export class IsapiClient {
         if (!response.ok) {
           await response.body?.cancel()
           if (response.status === 403)
-            throw new AppError("NVR_FORBIDDEN", 502, "设备账户没有此查询权限。")
+            throw new AppError("NVR_FORBIDDEN", 502, "设备账户没有此操作权限。")
           throw new AppError(
             "NVR_HTTP_ERROR",
             502,
-            `设备查询失败（HTTP ${response.status}）。`
+            `设备操作失败（HTTP ${response.status}）。`
           )
         }
         const reader = response.body?.getReader()

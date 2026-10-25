@@ -1,5 +1,7 @@
 "use client"
 
+import { useQueryStates } from "nuqs"
+import { playbackUrlParsers } from "@/lib/url-state"
 import { useCallback, useState } from "react"
 import { toast } from "sonner"
 import {
@@ -92,8 +94,14 @@ export function RecordingConsole() {
   const channelsQuery = useChannels()
   const resources = channelsQuery.data
   const resourceError = channelsQuery.error?.message
-  const [preferredTrack, setTrack] = useState("")
-  const [preferredDate, setDate] = useState("")
+  const [{ track: preferredTrack, date: preferredDate, zoom }, setUrlState] =
+    useQueryStates(playbackUrlParsers, { shallow: true, scroll: false })
+  function setTrack(value: string) {
+    void setUrlState({ track: value, date }, { history: "push" })
+  }
+  function setDate(value: string) {
+    void setUrlState({ track, date: value }, { history: "push" })
+  }
   const track = resources?.channels.some(
     (channel) => channel.id === preferredTrack
   )
@@ -103,7 +111,6 @@ export function RecordingConsole() {
   const recordingsQuery = useRecordings({ track, date })
   const [refresh, setRefresh] = useState(0)
   const [selection, setSelection] = useState(() => emptySelection(""))
-  const [zoom, setZoom] = useState("1")
   const [preferences, setPreferences] = useState<PlaybackPreferences>({
     rate: 1,
     sound: false,
@@ -400,7 +407,12 @@ export function RecordingConsole() {
                     aria-label="时间轴缩放"
                     value={[zoom]}
                     onValueChange={(values) => {
-                      if (values[0]) setZoom(values[0])
+                      if (
+                        values[0] === "1" ||
+                        values[0] === "2" ||
+                        values[0] === "4"
+                      )
+                        void setUrlState({ track, date, zoom: values[0] })
                     }}
                     variant="outline"
                     size="sm"

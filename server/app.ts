@@ -1,6 +1,8 @@
 import { Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
 import {
+  renameChannelSchema,
+  trackIdSchema,
   liveRequestSchema,
   liveSchema,
   previewRequestSchema,
@@ -51,6 +53,42 @@ export function createApp(
         timeZone,
         today: todayIn(timeZone),
       })
+    )
+  })
+  app.use(
+    "/channels/:id/name",
+    bodyLimit({
+      maxSize: 1024,
+      onError: (c) =>
+        c.json(
+          { error: { code: "INVALID_BODY", message: "请求内容过大。" } },
+          400
+        ),
+    })
+  )
+  app.put("/channels/:id/name", async (c) => {
+    const origin = c.req.header("origin")
+    const target = new URL(c.req.url)
+    target.host = c.req.header("host") ?? target.host
+    if (
+      c.req.header("sec-fetch-site") === "cross-site" ||
+      (origin && origin !== target.origin)
+    )
+      throw new AppError("ORIGIN_DENIED", 403, "请从本应用页面修改通道名称。")
+    if (!c.req.header("content-type")?.startsWith("application/json"))
+      throw new AppError("INVALID_BODY", 400, "请使用 JSON 请求。")
+    const id = trackIdSchema.safeParse(c.req.param("id"))
+    const input = renameChannelSchema.safeParse(
+      await c.req.json().catch(() => undefined)
+    )
+    if (!id.success || !input.success)
+      throw new AppError(
+        "INVALID_BODY",
+        400,
+        "请提供合法通道和名称（1–32 个 UTF-8 字节），不接受其他参数。"
+      )
+    return c.json(
+      await getService().renameChannel(id.data, input.data, c.req.raw.signal)
     )
   })
   app.get("/recordings", async (c) => {
