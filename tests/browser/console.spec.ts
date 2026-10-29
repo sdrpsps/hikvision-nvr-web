@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test"
-import { selectDate, selectOption } from "./controls"
+import { selectDate } from "./controls"
 
 const range = { startAt: "2026-10-16T16:00:00Z", endAt: "2026-10-17T16:00:00Z" }
 const segment = {
@@ -144,9 +144,23 @@ for (const mobile of [false, true]) {
         '.timeline-scroll-area [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"]'
       )
     ).toBeVisible()
-    await selectOption(page, "摄像头", "轨道 201")
+    const channelSidebar = page.getByRole("complementary", {
+      name: "设备通道",
+      exact: true,
+    })
+    await channelSidebar
+      .getByRole("button", { name: "轨道 201", exact: true })
+      .click()
+    await expect(
+      channelSidebar.getByRole("button", { name: "轨道 201", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
     await expect(page.getByText("这一天没有检索到录像")).toBeVisible()
-    await selectOption(page, "摄像头", "轨道 101")
+    await channelSidebar
+      .getByRole("button", { name: "轨道 101", exact: true })
+      .click()
+    await expect(
+      channelSidebar.getByRole("button", { name: "轨道 101", exact: true })
+    ).toHaveAttribute("aria-pressed", "true")
     await expect(page.getByText("1 个录像片段")).toBeVisible()
     await selectDate(page, "2026-10-15")
     await expect(page.getByText("设备查询超时。")).toBeVisible()

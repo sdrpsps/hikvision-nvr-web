@@ -47,9 +47,13 @@ test("playback links restore filters, update URL, and support back/forward and r
 }) => {
   await mockApi(page)
   await page.goto("/playback?track=201&date=2026-10-24&zoom=4")
+  const channelSidebar = page.getByRole("complementary", {
+    name: "设备通道",
+    exact: true,
+  })
   await expect(
-    page.getByRole("combobox", { name: "摄像头", exact: true })
-  ).toContainText("摄像头二")
+    channelSidebar.getByRole("button", { name: "摄像头二", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
   await expect(
     page.getByRole("button", { name: "日期", exact: true })
   ).toContainText("2026-10-24")
@@ -60,7 +64,9 @@ test("playback links restore filters, update URL, and support back/forward and r
   await expect(
     page.locator(".playback-player").getByRole("slider")
   ).toHaveCount(1)
-  await selectOption(page, "摄像头", "摄像头一")
+  await channelSidebar
+    .getByRole("button", { name: "摄像头一", exact: true })
+    .click()
   await expect.poll(() => params(page).get("track")).toBe("101")
   await selectDate(page, "2026-10-23")
   await expect.poll(() => params(page).get("date")).toBe("2026-10-23")
@@ -70,12 +76,12 @@ test("playback links restore filters, update URL, and support back/forward and r
   ).toContainText("2026-10-24")
   await page.goBack()
   await expect(
-    page.getByRole("combobox", { name: "摄像头", exact: true })
-  ).toContainText("摄像头二")
+    channelSidebar.getByRole("button", { name: "摄像头二", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
   await page.goForward()
   await expect(
-    page.getByRole("combobox", { name: "摄像头", exact: true })
-  ).toContainText("摄像头一")
+    channelSidebar.getByRole("button", { name: "摄像头一", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
   await page.getByRole("button", { name: "2 倍", exact: true }).click()
   await expect.poll(() => params(page).get("zoom")).toBe("2")
   await page.reload()
@@ -83,8 +89,8 @@ test("playback links restore filters, update URL, and support back/forward and r
     page.getByRole("button", { name: "2 倍", exact: true })
   ).toHaveAttribute("aria-pressed", "true")
   await expect(
-    page.getByRole("combobox", { name: "摄像头", exact: true })
-  ).toContainText("摄像头一")
+    channelSidebar.getByRole("button", { name: "摄像头一", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
 })
 
 test("live restores wall assignments and sidebar without starting media; UI changes survive reload", async ({
@@ -130,8 +136,10 @@ test("malformed parameters fall back safely and never reach API inputs", async (
   const requests = await mockApi(page)
   await page.goto("/playback?track=https://evil.test&date=2026-02-30&zoom=100")
   await expect(
-    page.getByRole("combobox", { name: "摄像头", exact: true })
-  ).toContainText("摄像头一")
+    page
+      .getByRole("complementary", { name: "设备通道", exact: true })
+      .getByRole("button", { name: "摄像头一", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
   await expect(
     page.getByRole("button", { name: "日期", exact: true })
   ).toContainText("2026-10-25")

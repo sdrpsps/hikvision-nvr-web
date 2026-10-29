@@ -67,15 +67,14 @@ test("live rename refreshes shared names while playback has no rename action", a
   await expect(dialog).toBeVisible()
   await dialog.getByRole("button", { name: "取消", exact: true }).click()
   await page.getByRole("link", { name: "录像回放" }).click()
-  await expect(page.getByRole("combobox", { name: "摄像头" })).toContainText(
-    "门口 & 院子"
-  )
+  const channel = page
+    .getByRole("complementary", { name: "设备通道", exact: true })
+    .getByRole("button", { name: "门口 & 院子", exact: true })
+  await expect(channel).toBeVisible()
   await expect(
     page.getByRole("button", { name: /修改通道.*名称/ })
   ).toHaveCount(0)
-  await expect(page.getByRole("combobox", { name: "摄像头" })).toContainText(
-    "门口 & 院子"
-  )
+  await expect(channel).toHaveAttribute("aria-pressed", "true")
 })
 
 test("mobile rename cancels without a write and blocks duplicate submissions", async ({

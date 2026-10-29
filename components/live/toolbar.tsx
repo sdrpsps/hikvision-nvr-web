@@ -1,11 +1,7 @@
 "use client"
 
-import {
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  PlayIcon,
-  SquareIcon,
-} from "lucide-react"
+import { PlayIcon, SquareIcon } from "lucide-react"
+import { ChannelSidebarToggle } from "@/components/channel-sidebar"
 import { Button } from "@/components/ui/button"
 import { WallLayoutControl } from "@/components/video-wall"
 import type { LiveConsoleState } from "@/hooks/use-live-console"
@@ -37,23 +33,11 @@ export function LiveToolbar({
   return (
     <div className="console-toolbar">
       <div className="console-toolbar-group">
-        <Button
-          variant="ghost"
-          aria-label={sidebarOpen ? "收起通道" : "展开通道"}
-          aria-expanded={sidebarOpen}
-          aria-controls="live-channels"
-          onClick={(event) => {
-            event.currentTarget.focus()
-            toggleSidebar()
-          }}
-        >
-          {sidebarOpen ? (
-            <PanelLeftCloseIcon data-icon="inline-start" />
-          ) : (
-            <PanelLeftOpenIcon data-icon="inline-start" />
-          )}
-          通道
-        </Button>
+        <ChannelSidebarToggle
+          open={sidebarOpen}
+          controls="live-channels"
+          onToggle={toggleSidebar}
+        />
         <span className="channel-target">分配到窗口 {selected + 1}</span>
       </div>
       <div className="console-toolbar-group live-toolbar-actions">

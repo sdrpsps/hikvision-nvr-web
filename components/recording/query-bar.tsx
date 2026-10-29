@@ -2,71 +2,40 @@
 
 import { RefreshCwIcon } from "lucide-react"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
+import { ChannelSidebarToggle } from "@/components/channel-sidebar"
 import { RecordingDatePicker } from "@/components/recording-date-picker"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { DeviceDetails } from "./device-details"
 
 type QueryBarProps = Pick<
   RecordingConsoleState,
   | "resources"
-  | "track"
   | "date"
   | "validDate"
-  | "setTrack"
+  | "sidebarOpen"
+  | "toggleSidebar"
   | "setDate"
   | "refreshQueries"
 >
 
 export function RecordingQueryBar({
   resources,
-  track,
   date,
   validDate,
-  setTrack,
+  sidebarOpen,
+  toggleSidebar,
   setDate,
   refreshQueries,
 }: QueryBarProps) {
   return (
     <section className="playback-query-bar" aria-label="检索录像">
+      <ChannelSidebarToggle
+        open={sidebarOpen}
+        controls="playback-channels"
+        onToggle={toggleSidebar}
+      />
       <FieldGroup className="playback-query-fields">
-        <Field data-disabled={!resources?.channels.length}>
-          <FieldLabel htmlFor="track">摄像头</FieldLabel>
-          <Select
-            items={
-              resources?.channels.map((channel) => ({
-                label: channel.name,
-                value: channel.id,
-              })) ?? []
-            }
-            value={track}
-            onValueChange={(value) => {
-              setTrack(value ?? "")
-            }}
-            disabled={!resources?.channels.length}
-          >
-            <SelectTrigger id="track" className="w-full">
-              <SelectValue placeholder="暂无可用摄像头" />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              <SelectGroup>
-                {resources?.channels.map((channel) => (
-                  <SelectItem key={channel.id} value={channel.id}>
-                    {channel.name}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
         <Field data-invalid={!!date && !validDate} data-disabled={!resources}>
           <FieldLabel htmlFor="date">日期</FieldLabel>
           <RecordingDatePicker

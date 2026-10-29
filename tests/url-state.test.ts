@@ -31,9 +31,24 @@ describe("URL state parsers", () => {
     expect(playbackUrlParsers.zoom.parse("3")).toBeNull()
     expect(playbackUrlParsers.zoom.parse("4")).toBe("4")
     expect(liveUrlParsers.layout.parse("64")).toBeNull()
-    expect(liveUrlParsers.sidebar.parse("invalid")).toBeNull()
     for (const value of ["0", "17", "2abc", "2.5", "01"])
       expect(liveUrlParsers.window.parse(value)).toBeNull()
+  })
+  it("restores shared sidebar state with an expanded default", () => {
+    for (const sidebar of [
+      playbackUrlParsers.sidebar,
+      liveUrlParsers.sidebar,
+    ]) {
+      expect(sidebar.parse("false")).toBe(false)
+      expect(sidebar.serialize(false)).toBe("false")
+      expect(sidebar.parse(sidebar.serialize(true))).toBe(true)
+      expect(sidebar.parseServerSide("false")).toBe(false)
+      expect(sidebar.parseServerSide(undefined)).toBe(true)
+      for (const value of ["invalid", "False", "0", ""]) {
+        expect(sidebar.parse(value)).toBeNull()
+        expect(sidebar.parseServerSide(value)).toBe(true)
+      }
+    }
   })
   it("round trips bounded slot assignments, including an explicitly empty window", () => {
     const state = { 0: "201", 2: "", 15: "1601" }

@@ -256,6 +256,7 @@ for (const codec of ["h264", "hevc"] as const) {
       0
     )
     expect(bodies).toEqual([])
+    expect(audioRequests).toEqual([])
     await page.getByRole("button", { name: "播放" }).click()
     await page.locator("video").evaluate((v: HTMLVideoElement) => {
       v.loop = true
@@ -264,7 +265,8 @@ for (const codec of ["h264", "hevc"] as const) {
       page.getByText(/实际编码：|预览已就绪|文件起点与/)
     ).toHaveCount(0)
     await expect(page.locator("video")).not.toHaveAttribute("controls")
-    await expect(page.getByRole("switch", { name: "声音" })).toBeVisible()
+    await expect(page.getByRole("switch", { name: "声音" })).toBeChecked()
+    await expect.poll(() => audioRequests.length).toBeGreaterThan(0)
     await expect
       .poll(() =>
         page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState)
@@ -307,7 +309,6 @@ for (const codec of ["h264", "hevc"] as const) {
     await page.getByRole("button", { name: "1×", exact: true }).click()
     await page.evaluate(() => document.exitFullscreen())
     await playAndSeek(page, 1)
-    await page.getByRole("switch", { name: "声音" }).click()
     await page.getByRole("button", { name: "播放录像", exact: true }).click()
     await expect
       .poll(() =>
@@ -424,6 +425,11 @@ for (const codec of ["h264", "hevc"] as const) {
         () => document.documentElement.scrollWidth <= innerWidth
       )
     ).toBe(true)
+    const closedBeforeStop = await page.evaluate(
+      () =>
+        (window as unknown as { playbackAudioStats: { closed: number } })
+          .playbackAudioStats.closed
+    )
     await page.getByRole("button", { name: "关闭回放" }).click()
     await expect(page.locator("video")).toHaveCount(0)
     await expect.poll(() => deleted.length).toBe(1)
@@ -435,7 +441,7 @@ for (const codec of ["h264", "hevc"] as const) {
               .playbackAudioStats.closed
         )
       )
-      .toBe(1)
+      .toBe(closedBeforeStop + 1)
     expect(bodies).toEqual([{ track: "101", date: "2026-10-17", segmentId }])
     await page.getByRole("button", { name: "播放" }).click()
     await expect(page.locator("video")).toHaveCount(1)
@@ -672,6 +678,10 @@ async function mockProgressivePlayback(
           ...(state.complete ? { totalDurationSeconds: state.available } : {}),
         },
       })
+    if (path.endsWith("/audio"))
+      return route.fulfill({
+        json: { status: "unsupported", videoStartSeconds: 0, chunks: [] },
+      })
     if (path.endsWith("index.m3u8"))
       return route.fulfill({
         contentType: "application/vnd.apple.mpegurl",
@@ -854,9 +864,10 @@ test("playback automatically confirms completion, releases before next file and 
   expect(posts).toHaveLength(0)
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await pauseSequenceVideo(page)
+  const sound = page.getByRole("switch", { name: "声音", exact: true })
+  await expect(sound).toBeChecked()
   await page.getByRole("button", { name: "播放倍速" }).click()
   await page.getByRole("button", { name: "2×", exact: true }).click()
-  await page.getByRole("switch", { name: "声音", exact: true }).click()
   await page.locator("video").dispatchEvent("ended")
   expect(events.filter((event) => event === "status")).toHaveLength(0)
   expect(posts).toHaveLength(1)
@@ -889,12 +900,13 @@ test("playback automatically confirms completion, releases before next file and 
       .locator("video")
       .evaluate((video: HTMLVideoElement) => video.playbackRate)
   ).toBe(2)
-  await expect(
-    page.getByRole("switch", { name: "声音", exact: true })
-  ).toBeChecked()
+  await expect(sound).toBeChecked()
+  await sound.click()
+  await expect(sound).not.toBeChecked()
   await endSequenceVideo(page)
   await expect.poll(() => posts.length).toBe(3)
   await pauseSequenceVideo(page)
+  await expect(sound).not.toBeChecked()
   await expect(
     page
       .locator('[data-sonner-toast][data-type="warning"]')
@@ -1002,15 +1014,17 @@ test("player operation failures use Sonner and remain isolated from video", asyn
   const { posts } = await mockSequence(page)
   await page.getByRole("button", { name: "播放", exact: true }).click()
   await pauseSequenceVideo(page)
-  await page.getByRole("switch", { name: "声音", exact: true }).click()
-  await expect(
-    page
-      .locator('[data-sonner-toast][data-type="error"]')
-      .filter({ hasText: "浏览器尚未允许声音，请再次点击开启声音。" })
-  ).toBeVisible()
-  await expect(
-    page.getByRole("switch", { name: "声音", exact: true })
-  ).not.toBeChecked()
+  const audioError = page
+    .locator('[data-sonner-toast][data-type="error"]')
+    .filter({ hasText: "浏览器尚未允许声音，请再次点击开启声音。" })
+  const sound = page.getByRole("switch", { name: "声音", exact: true })
+  await expect(audioError).toBeVisible()
+  await expect(sound).not.toBeChecked()
+  await audioError.getByRole("button", { name: "关闭提示" }).click()
+  await expect(audioError).toHaveCount(0)
+  await sound.click()
+  await expect(audioError).toBeVisible()
+  await expect(sound).not.toBeChecked()
   await page.locator("video").evaluate((video: HTMLVideoElement) => {
     video.play = () =>
       Promise.reject(new DOMException("Playback denied", "NotAllowedError"))
@@ -1151,7 +1165,7 @@ test("real LAN preview: browser decoding, pause/seek and repeated cleanup", asyn
       )
       await playAndSeek(page, 10, session.startOffsetSeconds ?? 0)
       if (attempt === 0) {
-        await page.getByRole("switch", { name: "声音" }).click()
+        await expect(page.getByRole("switch", { name: "声音" })).toBeChecked()
         await page
           .getByRole("button", { name: "播放录像", exact: true })
           .click()

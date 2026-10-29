@@ -19,7 +19,7 @@ for (const viewport of [
   { width: 375, height: 812 },
   { width: 375, height: 320 },
 ]) {
-  test(`64-option select keeps keyboard focus visible at ${viewport.width}x${viewport.height}`, async ({
+  test(`64-channel live select keeps keyboard focus visible at ${viewport.width}x${viewport.height}`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport)
@@ -40,24 +40,6 @@ for (const viewport of [
           },
         })
       }
-      if (url.pathname === "/api/recordings") {
-        const range = {
-          startAt: "2026-10-16T16:00:00Z",
-          endAt: "2026-10-17T16:00:00Z",
-        }
-        return route.fulfill({
-          json: {
-            trackId: url.searchParams.get("track"),
-            date: url.searchParams.get("date"),
-            timeZone: "Asia/Shanghai",
-            range,
-            segments: [],
-            coverage: [],
-            gaps: [range],
-            warnings: [],
-          },
-        })
-      }
       return route.fulfill({
         status: 503,
         json: {
@@ -68,14 +50,14 @@ for (const viewport of [
         },
       })
     })
-    await page.goto("/playback")
+    await page.goto("/?layout=1")
     const trigger = page.getByRole("combobox", {
-      name: "摄像头",
+      name: "窗口 1 通道",
       exact: true,
     })
     const list = page.getByRole("listbox")
     const first = page.getByRole("option", {
-      name: "摄像头 1",
+      name: "选择通道",
       exact: true,
     })
     const last = page.getByRole("option", {
@@ -83,8 +65,9 @@ for (const viewport of [
       exact: true,
     })
     await expect(trigger).toBeEnabled()
+    await expect(trigger).toContainText("摄像头 1")
     await trigger.click()
-    await expect(page.getByRole("option")).toHaveCount(64)
+    await expect(page.getByRole("option")).toHaveCount(65)
     await expect(list).toHaveAttribute("data-slot", "scroll-area-viewport")
 
     await page.keyboard.press("End")
@@ -112,7 +95,7 @@ for (const viewport of [
     await page.keyboard.press("Home")
     await expect(first).toBeFocused()
     await expect.poll(() => optionFitsViewport(first)).toBe(true)
-    for (let index = 1; index < 64; index++)
+    for (let index = 0; index < 64; index++)
       await page.keyboard.press("ArrowDown")
     await expect(last).toBeFocused()
     await expect.poll(() => optionFitsViewport(last)).toBe(true)

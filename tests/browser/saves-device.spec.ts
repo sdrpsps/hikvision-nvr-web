@@ -698,17 +698,13 @@ test.describe("real NVR browser recording and streaming exports", () => {
     )
     if (segmentIndex < 0) throw new Error("所选日期没有可验证的真实录像片段。")
     await page.goto("/playback")
-    await expect(
-      page.getByRole("combobox", { name: "摄像头", exact: true })
-    ).toBeEnabled()
-    if (
-      !(
-        await page
-          .getByRole("combobox", { name: "摄像头", exact: true })
-          .textContent()
-      )?.includes(channel.name)
-    )
-      await selectOption(page, "摄像头", channel.name)
+    const channelButton = page
+      .getByRole("complementary", { name: "设备通道", exact: true })
+      .getByRole("button", { name: channel.name, exact: true })
+    await expect(channelButton).toBeEnabled()
+    if ((await channelButton.getAttribute("aria-pressed")) !== "true")
+      await channelButton.click()
+    await expect(channelButton).toHaveAttribute("aria-pressed", "true")
     await selectDate(page, date)
     const list = page.getByRole("button", { name: "片段列表", exact: true })
     await list.click()

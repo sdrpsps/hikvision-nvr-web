@@ -10,10 +10,16 @@ export const parseAsRecordingDate = createParser({
   parse: (value) => (dateSchema.safeParse(value).success ? value : null),
   serialize: String,
 })
+export const parseAsSidebar = createParser({
+  parse: (value) =>
+    value === "true" ? true : value === "false" ? false : null,
+  serialize: String,
+})
 export const playbackUrlParsers = {
   track: parseAsTrack.withDefault(""),
   date: parseAsRecordingDate.withDefault(""),
   zoom: parseAsStringLiteral(["1", "2", "4"] as const).withDefault("1"),
+  sidebar: parseAsSidebar.withDefault(true),
 }
 export const parseAsWindow = createParser({
   parse: (value) => (/^(?:[1-9]|1[0-6])$/.test(value) ? Number(value) : null),
@@ -44,11 +50,6 @@ export const parseAsSlots = createParser<Record<number, string>>({
       .join(","),
   eq: (a, b) =>
     JSON.stringify(Object.entries(a)) === JSON.stringify(Object.entries(b)),
-})
-export const parseAsSidebar = createParser({
-  parse: (value) =>
-    value === "true" ? true : value === "false" ? false : null,
-  serialize: String,
 })
 export const liveUrlParsers = {
   layout: parseAsStringLiteral(["1", "2", "4", "8", "16"] as const).withDefault(

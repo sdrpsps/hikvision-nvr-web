@@ -23,6 +23,25 @@ async function channels(page: Page) {
       },
     })
   )
+  // Keep navigation to playback on synthetic data as well.
+  await page.route("**/api/recordings?**", (route) => {
+    const query = new URL(route.request().url()).searchParams
+    return route.fulfill({
+      json: {
+        trackId: query.get("track"),
+        date: query.get("date"),
+        timeZone: "Asia/Shanghai",
+        range: {
+          startAt: "2026-10-16T16:00:00Z",
+          endAt: "2026-10-17T16:00:00Z",
+        },
+        segments: [],
+        coverage: [],
+        gaps: [],
+        warnings: [],
+      },
+    })
+  })
 }
 for (const mobile of [false, true])
   test(`live wall is idle by default; all layouts and assignments ${mobile ? "mobile" : "desktop"}`, async ({

@@ -7,15 +7,24 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { ConsoleNav } from "@/components/console-nav"
+import { ChannelSidebar } from "@/components/channel-sidebar"
 import { SaveActivityBar } from "@/components/browser-save-provider"
 import { VideoWall } from "@/components/video-wall"
-import { LiveChannelSidebar } from "@/components/live/channel-sidebar"
 import { LiveToolbar } from "@/components/live/toolbar"
 import { LiveWindow } from "@/components/live/window"
 
 export function LiveConsole() {
   const state = useLiveConsole()
-  const { layout, sidebarOpen, error, refreshChannels } = state
+  const {
+    layout,
+    sidebarOpen,
+    channels,
+    error,
+    selected,
+    trackFor,
+    setAssignments,
+    refreshChannels,
+  } = state
 
   return (
     <div className="console-shell live-shell">
@@ -44,11 +53,22 @@ export function LiveConsole() {
         )}
         <div
           className={cn(
-            "live-workspace",
+            "channel-workspace live-workspace",
             !sidebarOpen && "is-sidebar-collapsed"
           )}
         >
-          <LiveChannelSidebar {...state} />
+          <ChannelSidebar
+            id="live-channels"
+            open={sidebarOpen}
+            channels={channels}
+            error={error}
+            selectedTrack={trackFor(selected)}
+            onSelect={(track) =>
+              setAssignments((old) => ({ ...old, [selected]: track }))
+            }
+            onRefresh={refreshChannels}
+            allowRename
+          />
           <section className="live-stage" aria-label="多窗口实时预览">
             <ScrollArea
               className="live-wall-scroll"

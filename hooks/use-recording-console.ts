@@ -13,8 +13,10 @@ export function useRecordingConsole() {
   const channelsQuery = useChannels()
   const resources = channelsQuery.data
   const resourceError = channelsQuery.error?.message
-  const [{ track: preferredTrack, date: preferredDate, zoom }, setUrlState] =
-    useQueryStates(playbackUrlParsers, { shallow: true, scroll: false })
+  const [
+    { track: preferredTrack, date: preferredDate, zoom, sidebar: sidebarOpen },
+    setUrlState,
+  ] = useQueryStates(playbackUrlParsers, { shallow: true, scroll: false })
   const track = resources?.channels.some(
     (channel) => channel.id === preferredTrack
   )
@@ -25,7 +27,7 @@ export function useRecordingConsole() {
   const [refresh, setRefresh] = useState(0)
   const [preferences, setPreferences] = useState<PlaybackPreferences>({
     rate: 1,
-    sound: false,
+    sound: true,
   })
   const updatePreferences = useCallback(
     (value: Partial<PlaybackPreferences>) => {
@@ -53,6 +55,7 @@ export function useRecordingConsole() {
   const selection = useRecordingSelection(key, data)
 
   function setTrack(value: string) {
+    if (value === track) return
     selection.resetSelection()
     void setUrlState({ track: value, date }, { history: "push" })
   }
@@ -63,6 +66,9 @@ export function useRecordingConsole() {
   function setZoom(value: "1" | "2" | "4") {
     void setUrlState({ track, date, zoom: value })
   }
+  function toggleSidebar() {
+    void setUrlState((old) => ({ sidebar: !old.sidebar }))
+  }
 
   return {
     resources,
@@ -71,6 +77,8 @@ export function useRecordingConsole() {
     track,
     date,
     zoom,
+    sidebarOpen,
+    toggleSidebar,
     selectionKey: key,
     validDate,
     loading,
@@ -78,6 +86,7 @@ export function useRecordingConsole() {
     dataUpdatedAt: recordingsQuery.dataUpdatedAt,
     preferences,
     updatePreferences,
+    refreshChannels: () => void channelsQuery.refetch(),
     refreshQueries,
     setTrack,
     setDate,
