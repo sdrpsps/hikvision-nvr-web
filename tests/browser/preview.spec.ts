@@ -286,19 +286,15 @@ for (const codec of ["h264", "hevc"] as const) {
     await expect(
       page.getByRole("button", { name: "从所选起点播放", exact: true })
     ).toHaveCount(0)
-    await page
-      .getByRole("button", { name: "更多播放操作", exact: true })
-      .click()
     await expect(
-      page.getByRole("button", { name: "从所选起点播放", exact: true })
-    ).toBeVisible()
+      page.getByRole("button", { name: "更多播放操作", exact: true })
+    ).toHaveCount(0)
+    await page.getByRole("button", { name: "播放倍速" }).click()
     expect(
       await page
         .locator('[data-slot="popover-content"]')
         .evaluate((element) => document.fullscreenElement?.contains(element))
     ).toBe(true)
-    await page.keyboard.press("Escape")
-    await page.getByRole("button", { name: "播放倍速" }).click()
     await page.getByRole("button", { name: "1.25×", exact: true }).click()
     await expect
       .poll(() =>
@@ -411,7 +407,10 @@ for (const codec of ["h264", "hevc"] as const) {
     ).toBeLessThan(1)
     expect(
       boxes
-        .filter((box) => !["播放倍速", "下载片段"].includes(box.label ?? ""))
+        .filter(
+          (box) =>
+            !["播放倍速", "回放步长", "下载片段"].includes(box.label ?? "")
+        )
         .every((b) => Math.abs(b.width - b.height) < 1)
     ).toBe(true)
     expect(

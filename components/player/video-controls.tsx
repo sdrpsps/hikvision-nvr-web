@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { PlaybackRate } from "@/components/playback-rate"
 import { ClipExport, type ClipSource } from "@/components/clip-export"
 import type { PlaybackPreferences } from "./types"
+import { PlaybackStep } from "./playback-step"
 
 type ControlsProps = {
   live: boolean
@@ -25,6 +26,8 @@ type ControlsProps = {
   actions?: ReactNode
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   reportError: (message: string, operation: string) => void
+  stepSeek: (delta: number) => void
+  initialStepSeconds?: number
 }
 
 export function VideoControls({
@@ -43,6 +46,8 @@ export function VideoControls({
   actions,
   onPreferencesChange,
   reportError,
+  stepSeek,
+  initialStepSeconds,
 }: ControlsProps) {
   const soundId = useId()
   return (
@@ -70,12 +75,12 @@ export function VideoControls({
             }}
           />
         )}
-        {!live && clipSource && (
-          <ClipExport
-            source={clipSource}
-            position={position}
-            duration={totalDuration}
+        {!live && (
+          <PlaybackStep
             container={frame}
+            onStep={stepSeek}
+            initialValue={initialStepSeconds}
+            onPreferencesChange={onPreferencesChange}
           />
         )}
         <div className="sound-control">
@@ -115,6 +120,14 @@ export function VideoControls({
           <MaximizeIcon data-icon="inline-start" />
           <span className="control-label">全屏</span>
         </Button>
+        {!live && clipSource && (
+          <ClipExport
+            source={clipSource}
+            position={position}
+            duration={totalDuration}
+            container={frame}
+          />
+        )}
       </div>
       {actions}
     </div>

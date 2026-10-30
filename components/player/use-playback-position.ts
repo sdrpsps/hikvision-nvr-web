@@ -46,6 +46,7 @@ export function usePlaybackPosition({
   const [pendingSeek, setPendingSeek] = useState<number | null>(
     initialOffset > 0 ? initialOffset : null
   )
+  const [seekMode, setSeekMode] = useState<"timeline" | "step">("timeline")
   const seekTarget = useRef<number | null>(
     initialOffset > 0 ? initialOffset : null
   )
@@ -85,7 +86,7 @@ export function usePlaybackPosition({
       !element ||
       target === null ||
       element.seeking ||
-      Math.abs(element.currentTime - target) > 0.5 ||
+      Math.abs(element.currentTime - target) > 0.05 ||
       element.readyState < 2
     )
       return
@@ -150,16 +151,59 @@ export function usePlaybackPosition({
     videoRef,
   ])
   const requestSeek = useCallback(
-    (seconds: number) => {
+    (seconds: number, mode: "timeline" | "step" = "timeline") => {
       if (!Number.isFinite(seconds) || seconds < 0) return
-      resumeAfterSeek.current = true
-      videoRef.current?.pause()
-      onPlaybackTimeChange?.(undefined)
+      resumeAfterSeek.current = mode === "timeline"
+      if (mode === "timeline") {
+        videoRef.current?.pause()
+        onPlaybackTimeChange?.(undefined)
+      }
+      setSeekMode(mode)
       seekTarget.current = seconds
       setPendingSeek(seconds)
       applyPendingSeek()
     },
     [applyPendingSeek, onPlaybackTimeChange, videoRef]
+  )
+  const stepSeek = useCallback(
+    (delta: number) => {
+      const element = videoRef.current
+      if (
+        live ||
+        !historyReady ||
+        !element ||
+        !Number.isFinite(delta) ||
+        (seekTarget.current !== null && resumeAfterSeek.current)
+      )
+        return
+      const current = seekTarget.current ?? element.currentTime
+      const end = totalDuration ?? element.duration
+      const target = Math.max(
+        0,
+        Math.min(
+          current + delta,
+          Number.isFinite(end) ? Math.max(0, end - 0.001) : Infinity
+        )
+      )
+      if (Math.abs(target - current) < 0.001) return
+      let available = false
+      for (let index = 0; index < element.seekable.length; index++) {
+        if (
+          target >= element.seekable.start(index) &&
+          target <= element.seekable.end(index)
+        )
+          available = true
+      }
+      if (!available) {
+        reportError(
+          "目标超出当前可定位范围，请等待录像读取或使用时间轴定位。",
+          "step"
+        )
+        return
+      }
+      requestSeek(target, "step")
+    },
+    [historyReady, live, reportError, requestSeek, totalDuration, videoRef]
   )
   useEffect(() => {
     if (serverSeek) return
@@ -192,6 +236,8 @@ export function usePlaybackPosition({
   return {
     position,
     historyReady,
+    historyLoading:
+      !historyReady || (pendingSeek !== null && seekMode === "timeline"),
     setHistoryReady,
     setDuration,
     initialOffset,
@@ -200,8 +246,8 @@ export function usePlaybackPosition({
     totalDuration,
     publishPosition,
     cancelSeek,
-    finishSeek,
     applyPendingSeek,
+    stepSeek,
   }
 }
 

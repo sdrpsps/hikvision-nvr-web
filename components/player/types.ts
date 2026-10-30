@@ -1,7 +1,11 @@
 import type { ReactNode } from "react"
 import type { PlaybackTimeRequest } from "@/lib/playback-clock"
 
-export type PlaybackPreferences = { rate: number; sound: boolean }
+export type PlaybackPreferences = {
+  rate: number
+  sound: boolean
+  stepSeconds?: number
+}
 
 export type StreamSource =
   | { track: string; date: string; segmentId: string; live?: false }

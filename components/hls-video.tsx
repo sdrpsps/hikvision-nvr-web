@@ -73,7 +73,7 @@ export function HlsVideo({
   )
   const {
     position,
-    historyReady,
+    historyLoading,
     setHistoryReady,
     setDuration,
     initialOffset,
@@ -82,8 +82,8 @@ export function HlsVideo({
     totalDuration,
     publishPosition,
     cancelSeek,
-    finishSeek,
     applyPendingSeek,
+    stepSeek,
   } = usePlaybackPosition({
     videoRef: video,
     session,
@@ -135,10 +135,7 @@ export function HlsVideo({
           ref={video}
           className="preview-video"
           style={{
-            visibility:
-              !live && (pendingSeek !== null || !historyReady)
-                ? "hidden"
-                : undefined,
+            visibility: !live && historyLoading ? "hidden" : undefined,
           }}
           playsInline
           muted
@@ -170,7 +167,7 @@ export function HlsVideo({
             )
               publishPosition(event.currentTarget.currentTime)
           }}
-          onSeeked={finishSeek}
+          onSeeked={applyPendingSeek}
           onDurationChange={(event) => {
             const seconds = event.currentTarget.duration
             if (!live)
@@ -191,7 +188,7 @@ export function HlsVideo({
         <PlaybackOverlay
           live={live}
           liveStarted={liveStarted}
-          historyReady={historyReady}
+          historyLoading={historyLoading}
           pendingSeek={pendingSeek}
           paused={paused}
           togglePlayback={togglePlayback}
@@ -202,7 +199,7 @@ export function HlsVideo({
         live={live}
         videoRef={video}
         frame={frame}
-        pendingSeek={pendingSeek}
+        pendingSeek={historyLoading ? pendingSeek : null}
         cancelSeek={cancelSeek}
         rate={rate}
         setRate={setRate}
@@ -214,6 +211,8 @@ export function HlsVideo({
         actions={actions}
         onPreferencesChange={onPreferencesChange}
         reportError={reportError}
+        stepSeek={stepSeek}
+        initialStepSeconds={initialPreferences?.stepSeconds}
       />
     </div>
   )

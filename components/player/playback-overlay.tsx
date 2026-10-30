@@ -7,7 +7,7 @@ import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 type OverlayProps = {
   live: boolean
   liveStarted: boolean
-  historyReady: boolean
+  historyLoading: boolean
   pendingSeek: number | null
   paused: boolean
   togglePlayback: () => void
@@ -16,14 +16,14 @@ type OverlayProps = {
 export function PlaybackOverlay({
   live,
   liveStarted,
-  historyReady,
+  historyLoading,
   pendingSeek,
   paused,
   togglePlayback,
 }: OverlayProps) {
   return (
     <>
-      {!live && historyReady && pendingSeek === null && (
+      {!live && !historyLoading && (
         <Button
           className="playback-surface-button"
           variant="ghost"
@@ -53,7 +53,7 @@ export function PlaybackOverlay({
           </EmptyHeader>
         </Empty>
       )}
-      {!live && (!historyReady || pendingSeek !== null) && (
+      {!live && historyLoading && (
         <Empty className="playback-startup" role="status">
           <EmptyHeader>
             <LoaderCircleIcon

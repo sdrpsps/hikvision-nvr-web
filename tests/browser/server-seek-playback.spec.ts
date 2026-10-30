@@ -23,6 +23,7 @@ async function mockServerSeekPlayback(
     failedCreate?: number
     failedDelete?: boolean
     complete?: boolean
+    total?: number
   } = {}
 ) {
   const posts: {
@@ -131,7 +132,7 @@ async function mockServerSeekPlayback(
             ...(!options.missingFileDuration && { fileDurationSeconds: 3660 }),
             source: "shttp",
             durationSeconds: 3,
-            totalDurationSeconds: 3,
+            totalDurationSeconds: options.total ?? 3,
             startOffsetSeconds: options.leadSeconds ?? 0,
             expiresAt: new Date(Date.now() + 120000).toISOString(),
             mode: "stream-copy",
@@ -191,14 +192,65 @@ async function pauseVideo(page: Page) {
   return video
 }
 
-async function restartPlayback(page: Page) {
-  await page.getByRole("button", { name: "更多播放操作", exact: true }).click()
-  await page
-    .getByRole("button", { name: "从所选起点播放", exact: true })
-    .click()
-}
-
 test.describe("SHTTP server-side seek", () => {
+  test("fine steps use the existing media session and report unavailable targets", async ({
+    page,
+  }) => {
+    const mock = await mockServerSeekPlayback(page, {
+      leadSeconds: 0.5,
+      total: 4,
+    })
+    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
+    const video = await pauseVideo(page)
+    await video.evaluate((element: HTMLVideoElement) => {
+      element.currentTime = 1
+    })
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    await page.getByRole("button", { name: "回放步长", exact: true }).click()
+    await page
+      .getByRole("slider", { name: "步长秒数", exact: true })
+      .fill("0.1")
+    await page.keyboard.press("Escape")
+    await page.keyboard.press("ArrowLeft")
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.currentTime)
+      )
+      .toBeCloseTo(0.9, 3)
+    expect(
+      await video.evaluate((element: HTMLVideoElement) => element.paused)
+    ).toBe(true)
+    await page.getByRole("button", { name: "回放步长", exact: true }).click()
+    await page.getByRole("slider", { name: "步长秒数", exact: true }).fill("2")
+    await page.keyboard.press("Escape")
+    await video.evaluate((element: HTMLVideoElement) => {
+      element.currentTime = 1.2
+    })
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    await page.keyboard.press("ArrowRight")
+    await expect(
+      page
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "目标超出当前可定位范围" })
+    ).toBeVisible()
+    expect(mock.posts).toHaveLength(1)
+    expect(
+      mock.events.filter((event) => event.startsWith("delete:start:"))
+    ).toHaveLength(0)
+    expect(
+      await video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    ).toBeCloseTo(1.2, 3)
+    await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  })
+
   test("stays idle on links, sends the selected instant and preserves full-file export coordinates", async ({
     page,
   }) => {
@@ -424,129 +476,5 @@ test.describe("SHTTP server-side seek", () => {
     )
     await expect(page.locator("video")).toHaveCount(0)
     expect(mock.posts).toHaveLength(1)
-  })
-
-  test("an explicit restart awaits DELETE and reopens only the latest target", async ({
-    page,
-  }) => {
-    const mock = await mockServerSeekPlayback(page)
-    const timeline = page.getByRole("slider", { name: "回放时间轴" })
-    await timeline.fill("1200")
-    await pauseVideo(page)
-    const release = mock.holdDelete()
-    try {
-      await restartPlayback(page)
-      await expect(page.locator("video")).toHaveCount(0)
-      await expect
-        .poll(
-          () =>
-            mock.events.filter((event) => event.startsWith("delete:start:"))
-              .length
-        )
-        .toBe(1)
-      expect(mock.posts).toHaveLength(1)
-      await timeline.fill("1210")
-      expect(mock.posts).toHaveLength(1)
-      release()
-      await expect.poll(() => mock.posts.length).toBe(2)
-      await pauseVideo(page)
-      expect(mock.posts[1].at).toBe(atSecond(1210))
-      expect(mock.events.indexOf(`delete:end:${sessionId(1)}`)).toBeLessThan(
-        mock.events.indexOf("post:2")
-      )
-      await page.getByRole("button", { name: "关闭回放", exact: true }).click()
-    } finally {
-      release()
-    }
-  })
-
-  test("an explicit restart fails closed when DELETE cannot be confirmed", async ({
-    page,
-  }) => {
-    const mock = await mockServerSeekPlayback(page, { failedDelete: true })
-    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
-    await pauseVideo(page)
-    await restartPlayback(page)
-    await expect(page.locator(".stream-player [role=alert]")).toHaveText(
-      "无法关闭上一段录像，请重试。"
-    )
-    await expect(page.locator("video")).toHaveCount(0)
-    expect(mock.posts).toHaveLength(1)
-  })
-
-  test("cancelling an explicit restart during DELETE never reopens playback", async ({
-    page,
-  }) => {
-    const mock = await mockServerSeekPlayback(page)
-    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
-    await pauseVideo(page)
-    const release = mock.holdDelete()
-    try {
-      await restartPlayback(page)
-      await expect
-        .poll(
-          () =>
-            mock.events.filter((event) => event.startsWith("delete:start:"))
-              .length
-        )
-        .toBe(1)
-      await page.getByRole("button", { name: "取消准备", exact: true }).click()
-      release()
-      await expect
-        .poll(
-          () =>
-            mock.events.filter((event) => event.startsWith("delete:end:"))
-              .length
-        )
-        .toBe(1)
-      await expect(page.locator("video")).toHaveCount(0)
-      await expect(
-        page.getByRole("button", { name: "播放", exact: true })
-      ).toBeEnabled()
-      expect(mock.posts).toHaveLength(1)
-    } finally {
-      release()
-    }
-  })
-
-  test("an explicit restart wins over an already releasing automatic handoff", async ({
-    page,
-  }) => {
-    const mock = await mockServerSeekPlayback(page, { complete: true })
-    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
-    const original = await pauseVideo(page)
-    const release = mock.holdDelete()
-    try {
-      await original.evaluate((element: HTMLVideoElement) => {
-        Object.defineProperty(element, "ended", {
-          configurable: true,
-          value: true,
-        })
-        element.dispatchEvent(new Event("ended", { bubbles: true }))
-      })
-      await expect
-        .poll(
-          () =>
-            mock.events.filter((event) => event.startsWith("delete:start:"))
-              .length
-        )
-        .toBe(1)
-      await restartPlayback(page)
-      await expect(page.locator("video")).toHaveCount(0)
-      expect(mock.posts).toHaveLength(1)
-      release()
-      await expect.poll(() => mock.posts.length).toBe(2)
-      await pauseVideo(page)
-      expect(mock.posts[1].at).toBe(atSecond(1200))
-      expect(
-        mock.events.filter((event) => event.startsWith("delete:start:")).length
-      ).toBe(1)
-      expect(mock.events.indexOf(`delete:end:${sessionId(1)}`)).toBeLessThan(
-        mock.events.indexOf("post:2")
-      )
-      await page.getByRole("button", { name: "关闭回放", exact: true }).click()
-    } finally {
-      release()
-    }
   })
 })

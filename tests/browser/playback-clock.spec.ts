@@ -146,6 +146,314 @@ async function startAndPause(page: Page) {
   return video
 }
 
+for (const playing of [false, true]) {
+  test(`keyboard steps keep the picture visible without loading flashes while ${playing ? "playing" : "paused"}`, async ({
+    page,
+  }) => {
+    const state = await mockClockPlayback(page)
+    const video = await startAndPause(page)
+    await video.evaluate((element: HTMLVideoElement) => {
+      element.currentTime = 1.4
+    })
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    if (playing)
+      await page.getByRole("button", { name: "播放录像", exact: true }).click()
+    await video.evaluate((element: HTMLVideoElement) => {
+      const changes = { hidden: 0, loading: 0, pauses: 0 }
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          if (
+            record.type === "attributes" &&
+            record.target === element &&
+            (element.style.visibility === "hidden" ||
+              record.oldValue?.includes("hidden"))
+          )
+            changes.hidden++
+          for (const node of record.addedNodes) {
+            if (
+              node instanceof Element &&
+              (node.matches(".playback-startup") ||
+                node.querySelector(".playback-startup"))
+            )
+              changes.loading++
+          }
+        }
+      })
+      observer.observe(element.closest(".video-surface")!, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ["style"],
+      })
+      element.addEventListener("pause", () => changes.pauses++)
+      Object.assign(window, { stepVisualChanges: changes })
+      // Keep the seek pending long enough to inspect the intermediate UI.
+      Object.defineProperty(element, "readyState", {
+        configurable: true,
+        get: () => 1,
+      })
+    })
+    await page.keyboard.press("ArrowRight")
+    await expect(video).toHaveCSS("visibility", "visible")
+    await expect(page.locator(".playback-startup")).toHaveCount(0)
+    await expect(
+      page.getByRole("button", { name: "取消定位", exact: true })
+    ).toHaveCount(0)
+    expect(
+      await video.evaluate((element: HTMLVideoElement) => element.paused)
+    ).toBe(!playing)
+    await video.evaluate((element: HTMLVideoElement) => {
+      Reflect.deleteProperty(element, "readyState")
+      element.dispatchEvent(new Event("canplay"))
+    })
+    for (const key of ["ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight"])
+      await page.keyboard.press(key)
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              stepVisualChanges: {
+                hidden: number
+                loading: number
+                pauses: number
+              }
+            }
+          ).stepVisualChanges
+      )
+    ).toEqual({ hidden: 0, loading: 0, pauses: 0 })
+    expect(state.posts).toBe(1)
+    await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  })
+}
+
+test("mouse dragging sets 0.1-second steps up to 2 seconds while arrows in the panel seek video", async ({
+  page,
+}) => {
+  await mockClockPlayback(page)
+  const video = await startAndPause(page)
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.currentTime = 1.4
+  })
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.seeking))
+    .toBe(false)
+  await page.getByRole("button", { name: "回放步长", exact: true }).click()
+  const slider = page.getByRole("slider", { name: "步长秒数", exact: true })
+  await expect(slider).toHaveAttribute("min", "0.1")
+  await expect(slider).toHaveAttribute("max", "2")
+  await expect(slider).toHaveAttribute("step", "0.1")
+  await expect(slider).toHaveValue("0.5")
+  const track = await page
+    .locator('[data-slot="popover-content"] [data-slot="slider-track"]')
+    .boundingBox()
+  const thumb = await page
+    .locator('[data-slot="popover-content"] [data-slot="slider-thumb"]')
+    .boundingBox()
+  await page.mouse.move(
+    thumb!.x + thumb!.width / 2,
+    thumb!.y + thumb!.height / 2
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    track!.x + track!.width + 20,
+    track!.y + track!.height / 2,
+    { steps: 5 }
+  )
+  await expect(slider).toHaveValue("2")
+  await page.mouse.move(track!.x - 20, track!.y + track!.height / 2, {
+    steps: 10,
+  })
+  await page.mouse.up()
+  await expect(slider).toHaveValue("0.1")
+  expect(
+    await video.evaluate((element: HTMLVideoElement) => element.currentTime)
+  ).toBeCloseTo(1.4, 3)
+  await slider.press("ArrowRight")
+  await expect(slider).toHaveValue("0.1")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.5, 3)
+  await slider.press("ArrowLeft")
+  await expect(slider).toHaveValue("0.1")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.4, 3)
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+})
+
+test("arrow keys seek by the chosen step, accumulate rapid presses and retain pause and preferences", async ({
+  page,
+}) => {
+  const state = await mockClockPlayback(page)
+  const video = await startAndPause(page)
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.currentTime = 1.4
+  })
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.seeking))
+    .toBe(false)
+  const step = page.getByRole("button", { name: "回放步长", exact: true })
+  await expect(step).toHaveText("步长 0.5 秒")
+  await page.keyboard.press("ArrowRight")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.9, 3)
+  await page.keyboard.press("ArrowLeft")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.4, 3)
+  await step.click()
+  await page.getByRole("slider", { name: "步长秒数", exact: true }).fill("0.1")
+  await page.keyboard.press("Escape")
+  await expect(step).toHaveText("步长 0.1 秒")
+  await step.press("ArrowRight")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.5, 3)
+  await page.evaluate(() => {
+    for (let index = 0; index < 5; index++)
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }))
+  })
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(2, 3)
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.seeking))
+    .toBe(false)
+  expect(
+    await video.evaluate((element: HTMLVideoElement) => element.paused)
+  ).toBe(true)
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  await startAndPause(page)
+  await expect(step).toHaveText("步长 0.1 秒")
+  expect(state.posts).toBe(2)
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+})
+
+test("step keys work in fullscreen, preserve playing state and stop at media boundaries", async ({
+  page,
+}) => {
+  await mockClockPlayback(page)
+  const video = await startAndPause(page)
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.currentTime = 1
+  })
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.seeking))
+    .toBe(false)
+  await page.getByRole("button", { name: "全屏", exact: true }).click()
+  await expect
+    .poll(() => page.evaluate(() => !!document.fullscreenElement))
+    .toBe(true)
+  await page.keyboard.press("ArrowRight")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(1.5, 3)
+  await page.getByRole("button", { name: "回放步长", exact: true }).click()
+  const option = page.getByRole("slider", { name: "步长秒数", exact: true })
+  expect(
+    await option.evaluate((element) =>
+      document.fullscreenElement?.contains(element)
+    )
+  ).toBe(true)
+  await option.fill("2")
+  await page.keyboard.press("Escape")
+  await page.keyboard.press("ArrowLeft")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(0, 3)
+  await page.keyboard.press("ArrowLeft")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(0, 3)
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("ArrowRight")
+  await expect
+    .poll(() =>
+      video.evaluate((element: HTMLVideoElement) => element.currentTime)
+    )
+    .toBeCloseTo(2.999, 2)
+  expect(
+    await video.evaluate((element: HTMLVideoElement) => element.paused)
+  ).toBe(true)
+  await page.getByRole("button", { name: "回放步长", exact: true }).click()
+  await page.getByRole("slider", { name: "步长秒数", exact: true }).fill("0.5")
+  await page.keyboard.press("Escape")
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.currentTime = 1
+  })
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.seeking))
+    .toBe(false)
+  await page.getByRole("button", { name: "播放录像", exact: true }).click()
+  await page.keyboard.press("ArrowLeft")
+  await expect
+    .poll(() => video.evaluate((element: HTMLVideoElement) => element.paused))
+    .toBe(false)
+  expect(
+    await video.evaluate((element: HTMLVideoElement) => element.currentTime)
+  ).toBeLessThan(1)
+  await page.evaluate(() => document.exitFullscreen())
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+})
+
+test("step keys leave modifiers, fields and popover navigation alone and are removed on close", async ({
+  page,
+}) => {
+  const state = await mockClockPlayback(page)
+  await page.keyboard.press("ArrowRight")
+  expect(state.posts).toBe(0)
+  const video = await startAndPause(page)
+  const position = await video.evaluate(
+    (element: HTMLVideoElement) => element.currentTime
+  )
+  await page.keyboard.press("Alt+ArrowRight")
+  await page.keyboard.press("Shift+ArrowLeft")
+  await page.getByRole("button", { name: "播放倍速", exact: true }).click()
+  await page.getByRole("button", { name: "自定义…", exact: true }).click()
+  await page.getByLabel("自定义倍速").press("ArrowLeft")
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "下载片段", exact: true }).click()
+  await page.getByLabel("片段起点").press("ArrowRight")
+  expect(
+    await video.evaluate((element: HTMLVideoElement) => element.currentTime)
+  ).toBeCloseTo(position, 3)
+  await page.getByRole("button", { name: "关闭对话框", exact: true }).click()
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  await page.keyboard.press("ArrowRight")
+  expect(state.posts).toBe(1)
+})
+
 test("one daily timeline maps midnight to the full-file offset and shows actual playback time", async ({
   page,
 }) => {

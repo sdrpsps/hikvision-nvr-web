@@ -58,14 +58,13 @@ export function StreamPlayer({
   } = useStreamSession(props)
   const frame = useRef<HTMLDivElement>(null)
   useImperativeHandle(ref, () => ({ start }))
-  const restartLabel = live ? "重新连接" : "从所选起点播放"
   const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
     <div className="preview-actions">
-      {session && !error && !expired && (
+      {live && session && !error && !expired && (
         <RestartAction
           container={frame}
-          label={restartLabel}
+          label="重新连接"
           onRestart={() => void prepare()}
         />
       )}
