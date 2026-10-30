@@ -518,6 +518,7 @@ async function mockSequence(page: Page) {
   const state = {
     complete: true,
     failNext: false,
+    failDelete: false,
     holdStatus: undefined as Promise<void> | undefined,
     holdDelete: undefined as Promise<void> | undefined,
   }
@@ -562,6 +563,8 @@ async function mockSequence(page: Page) {
       events.push("delete:start")
       await state.holdDelete
       events.push("delete:end")
+      if (state.failDelete)
+        return route.fulfill({ status: 503 }).catch(() => {})
       return route.fulfill({ status: 204 }).catch(() => {})
     }
     if (path.endsWith("/status")) {
@@ -573,6 +576,7 @@ async function mockSequence(page: Page) {
         .catch(() => {})
     }
     if (path.endsWith("/audio")) {
+      events.push("audio")
       const after = Number(
         new URL(request.url()).searchParams.get("after") ?? -1
       )
@@ -892,6 +896,15 @@ test("playback automatically confirms completion, releases before next file and 
   })
   await endSequenceVideo(page)
   await expect.poll(() => events.includes("delete:start")).toBe(true)
+  await expect(page.locator("video")).toHaveCount(0)
+  const audioRequests = events.filter((event) => event === "audio").length
+  await page.waitForTimeout(1100)
+  expect(events.filter((event) => event === "audio")).toHaveLength(
+    audioRequests
+  )
+  await expect(
+    page.locator('[data-sonner-toast][data-type="error"]')
+  ).toHaveCount(0)
   expect(posts).toHaveLength(1)
   state.holdDelete = undefined
   releaseDelete()
@@ -930,6 +943,21 @@ test("playback automatically confirms completion, releases before next file and 
     sequenceSegments.map((segment) => segment.id)
   )
   expect(events.filter((event) => event === "delete:end")).toHaveLength(3)
+})
+
+test("automatic playback reports a failed release and does not start the next file", async ({
+  page,
+}) => {
+  const { posts, state } = await mockSequence(page)
+  await page.getByRole("button", { name: "播放", exact: true }).click()
+  await pauseSequenceVideo(page)
+  state.failDelete = true
+  await endSequenceVideo(page)
+  await expect(page.locator(".stream-player [role=alert]")).toHaveText(
+    "无法关闭上一段录像，请重试。"
+  )
+  await expect(page.locator("video")).toHaveCount(0)
+  expect(posts).toHaveLength(1)
 })
 
 test("automatic playback cancels pending completion on close, selection and date switch", async ({

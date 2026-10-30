@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useId, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import { toast } from "sonner"
 import type { Preview, LiveStream } from "@/shared/contracts"
 import {
@@ -329,6 +330,11 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         restartRequested?: boolean
       } = { id }
       releasingPlayback.current = handoff
+      // Stop media and status requests before DELETE invalidates the session.
+      flushSync(() => {
+        setSession(undefined)
+        setLoading(true)
+      })
       const released = await release(id)
       if (releasingPlayback.current !== handoff) return
       releasingPlayback.current = null
@@ -347,9 +353,9 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         return
       }
       if (controller.signal.aborted || activeId.current !== id) return
+      setLoading(false)
       if (!released) throw new Error("无法关闭上一段录像，请重试。")
       activeId.current = null
-      setSession(undefined)
       callbacks.current.onPlaybackEnded?.()
     } catch (error) {
       if (!controller.signal.aborted)
