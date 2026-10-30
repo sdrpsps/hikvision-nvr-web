@@ -60,6 +60,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Run checks
         run: |
           corepack enable
