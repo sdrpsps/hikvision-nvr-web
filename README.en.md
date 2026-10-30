@@ -6,6 +6,10 @@ View live video and recordings from a Hikvision NVR in your browser, record live
 
 **There is no web login.** Anyone who can access the application can use it, so run it on a trusted computer or LAN. Device credentials are configured on the server; you do not enter them in the web interface.
 
+## Why this project exists
+
+The author wanted to play Hikvision NVR recordings on macOS, but the web playback plugin was available only for Windows. The macOS Hikvision client was outdated, and available GitHub projects did not meet the author's needs. This project provides live viewing, recording searches, and clip saving directly in a browser on macOS, without depending on the Windows plugin.
+
 ## Features
 
 - View 1, 2, 4, 8, or 16 live panes, each with its own channel, sound, and fullscreen controls.
