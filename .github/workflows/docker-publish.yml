@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v[0-9]*"
+  workflow_call:
+    inputs:
+      version_tag:
+        description: Version tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,7 +21,7 @@ jobs:
     steps:
       - name: Validate version tag
         env:
-          VERSION_TAG: ${{ github.ref_name }}
+          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
         run: |
           if [[ ! "$VERSION_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "Expected a version tag such as v1.2.3 or v1.2.3-rc.1" >&2
@@ -33,6 +39,35 @@ jobs:
 
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version_tag || github.ref_name }}
+
+      - name: Check package version
+        env:
+          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+            if (`v${version}` !== process.env.VERSION_TAG) {
+              console.error(`Package version ${version} does not match tag ${process.env.VERSION_TAG}`);
+              process.exit(1);
+            }
+          '
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run checks
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.9.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm typecheck
+          pnpm lint
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -59,7 +94,7 @@ jobs:
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},value=${{ inputs.version_tag || github.ref_name }}
 
       - name: Build and publish
         uses: docker/build-push-action@v6
