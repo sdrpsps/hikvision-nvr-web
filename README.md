@@ -80,6 +80,27 @@ pnpm start
 
 只需启动这一个应用，不用另外启动 API 服务。HTTPS、反向代理和部署环境配置仍需按实际运行环境完成。
 
+### 使用 Docker
+
+安装并启动 Docker 后，在项目目录构建生产镜像：
+
+```sh
+docker build -t hikvision-nvr-web:local .
+```
+
+在 `.env` 中填写设备信息，然后运行：
+
+```sh
+docker run -d --name hikvision-nvr-web --restart unless-stopped \
+  --env-file .env -p 3000:3000 hikvision-nvr-web:local
+```
+
+访问 [http://localhost:3000](http://localhost:3000)。镜像包含为本项目媒体转封装编译的精简 FFmpeg，不包含 ffprobe；Node.js 可执行文件使用 UPX 压缩。设备配置在容器启动时传入，不打包进镜像；修改 `.env` 后需重新创建容器。容器必须能够通过网络访问录像机的 HTTP、RTSP 及设备支持的回放端口。历史回放会使用容器内的临时空间，需确保空间充足。
+
+应用没有网页登录，端口映射会允许能够访问宿主机的人使用应用；请仅在受信任网络中开放，或通过反向代理限制页面、API 和媒体资源的访问。其他电脑通过局域网访问时，录制和下载仍需要 HTTPS。
+
+向 GitHub 推送版本标签（例如 `v1.2.3`）后，工作流会构建 `linux/amd64` 和 `linux/arm64` 镜像并发布到 `ghcr.io/<仓库所有者>/<仓库名>:1.2.3`，同时更新 `latest`。预发布标签（例如 `v1.2.3-rc.1`）只发布对应版本，不更新 `latest`。首次发布后可在 GitHub Packages 中检查包的可见性及访问权限；已有标签不会自动触发新工作流。
+
 ## 怎么用
 
 ### 看实时画面
