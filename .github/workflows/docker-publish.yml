@@ -61,7 +61,7 @@ jobs:
           node-version: 24
 
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/test-ffmpeg
 
       - name: Run checks
         run: |

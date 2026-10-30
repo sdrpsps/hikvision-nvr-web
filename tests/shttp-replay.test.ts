@@ -160,7 +160,8 @@ async function device(handlers: Handlers = {}): Promise<Device> {
 }
 
 async function until(predicate: () => boolean) {
-  for (let turn = 0; turn < 2000; turn++) {
+  const deadline = performance.now() + 2000
+  while (performance.now() < deadline) {
     if (predicate()) return
     await nextTurn()
   }

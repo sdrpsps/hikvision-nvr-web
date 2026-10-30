@@ -1,0 +1,24 @@
+name: Install test FFmpeg
+description: Build and cache the FFmpeg version used by the media tests
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: /tmp/hikvision-test-ffmpeg
+        key: media-build
+    - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fsSL --retry 3 https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz -o /tmp/ffmpeg.tar.xz
+        echo '8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e  /tmp/ffmpeg.tar.xz' | sha256sum -c -
+        mkdir -p /tmp/ffmpeg-src
+        tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-src --strip-components=1
+        cd /tmp/ffmpeg-src
+        ./configure --prefix=/tmp/hikvision-test-ffmpeg --disable-doc --disable-debug --disable-x86asm
+        make -j2
+        make install
+    - shell: bash
+      run: echo /tmp/hikvision-test-ffmpeg/bin >> "$GITHUB_PATH"
