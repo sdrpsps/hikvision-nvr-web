@@ -4,7 +4,7 @@ import { ArchiveIcon, PlayIcon } from "lucide-react"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
 import { PreviewPlayer } from "@/components/preview-player"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { RecordingLoading } from "./loading"
 import {
   Empty,
   EmptyDescription,
@@ -44,7 +44,7 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
     <section
       className="recording-content"
       aria-label="录像查询结果"
-      aria-busy={loading}
+      aria-busy={loading || (!resources && !resourceError)}
     >
       {resourceError || error ? (
         <Empty>
@@ -55,14 +55,7 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
         </Empty>
       ) : null}
       {!resources && !resourceError ? (
-        <div
-          className="flex flex-col gap-4"
-          role="status"
-          aria-label="正在读取设备"
-        >
-          <Skeleton className="h-8 w-56" />
-          <Skeleton className="h-40 w-full" />
-        </div>
+        <RecordingLoading label="正在读取设备" />
       ) : null}
       {resources && !resources.channels.length ? (
         <Empty>
@@ -74,16 +67,7 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
           </EmptyHeader>
         </Empty>
       ) : null}
-      {loading ? (
-        <div
-          className="flex flex-col gap-4"
-          role="status"
-          aria-label="正在查询录像"
-        >
-          <Skeleton className="h-60 w-full" />
-          <Skeleton className="h-24 w-full" />
-        </div>
-      ) : null}
+      {loading ? <RecordingLoading /> : null}
       {data && (
         <>
           {data.segments.length > 0 ? (

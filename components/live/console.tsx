@@ -1,12 +1,11 @@
 "use client"
 
-import { MonitorIcon } from "lucide-react"
 import { useLiveConsole } from "@/hooks/use-live-console"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
-import { ConsoleNav } from "@/components/console-nav"
+import { ConsoleHeader } from "@/components/console/header"
 import { ChannelSidebar } from "@/components/channel-sidebar"
 import { SaveActivityBar } from "@/components/browser-save-provider"
 import { VideoWall } from "@/components/video-wall"
@@ -28,15 +27,7 @@ export function LiveConsole() {
 
   return (
     <div className="console-shell live-shell">
-      <header className="console-header">
-        <div className="console-brand">
-          <div className="brand-mark">
-            <MonitorIcon aria-hidden="true" />
-          </div>
-          <span>NVR 控制台</span>
-        </div>
-        <ConsoleNav active="live" />
-      </header>
+      <ConsoleHeader active="live" />
       <SaveActivityBar />
       <main className="console-main live-main">
         <h1 className="sr-only">实时预览</h1>

@@ -3,7 +3,7 @@
 import { RefreshCwIcon } from "lucide-react"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
 import { ChannelSidebarToggle } from "@/components/channel-sidebar"
-import { RecordingDatePicker } from "@/components/recording-date-picker"
+import { RecordingDatePicker } from "@/components/recording/date-picker"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { DeviceDetails } from "./device-details"
@@ -37,7 +37,9 @@ export function RecordingQueryBar({
       />
       <FieldGroup className="playback-query-fields">
         <Field data-invalid={!!date && !validDate} data-disabled={!resources}>
-          <FieldLabel htmlFor="date">日期</FieldLabel>
+          <FieldLabel htmlFor="date" className="sr-only">
+            日期
+          </FieldLabel>
           <RecordingDatePicker
             id="date"
             value={date}

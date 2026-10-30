@@ -215,6 +215,82 @@ body {
   width: 1rem;
   height: 1rem;
 }
+.console-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.console-nav-icon {
+  display: grid;
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+}
+.console-nav-icon > svg {
+  grid-area: 1 / 1;
+  transition: opacity 100ms ease-out;
+}
+.console-nav-pending-icon {
+  opacity: 0;
+}
+.console-nav-label[data-pending="true"] .console-nav-idle-icon {
+  opacity: 0;
+  transition-delay: 120ms;
+}
+.console-nav-label[data-pending="true"] .console-nav-pending-icon {
+  opacity: 1;
+  transition-delay: 120ms;
+  animation: spin 1s linear infinite;
+}
+.console-loading-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.875rem;
+}
+.console-loading-workspace {
+  min-height: 24rem;
+}
+.console-loading-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-right: 1px solid var(--border);
+}
+.console-loading-picture {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0;
+}
+.recording-loading {
+  min-width: 0;
+}
+.recording-loading .console-loading-picture {
+  border-radius: var(--radius-md);
+}
+@media (max-width: 767px) {
+  .console-loading-sidebar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .console-loading-sidebar > :first-child {
+    grid-column: 1 / -1;
+  }
+  .console-loading-sidebar > :nth-child(n + 4) {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-nav-label[data-pending="true"] .console-nav-pending-icon,
+  .console-loading [data-slot="skeleton"],
+  .recording-loading [data-slot="skeleton"] {
+    animation: none;
+  }
+}
 .console-nav a:focus-visible,
 .window-selector:focus-visible {
   outline: 2px solid var(--ring);
@@ -711,9 +787,6 @@ body {
   pointer-events: auto;
   background: var(--card);
   padding: 0.5rem 1rem;
-}
-.playback-main {
-  max-width: 90rem;
 }
 .playback-workspace .channel-sidebar {
   border-right: 1px solid var(--border);

@@ -1,15 +1,10 @@
 import { Suspense } from "react"
-import { LiveConsole } from "@/components/live-console"
+import { LiveConsole } from "@/components/live/console"
+import { ConsoleLoading } from "@/components/console/loading"
 
 export default function Page() {
   return (
-    <Suspense
-      fallback={
-        <p role="status" className="p-4">
-          正在加载控制台…
-        </p>
-      }
-    >
+    <Suspense fallback={<ConsoleLoading mode="live" />}>
       <LiveConsole />
     </Suspense>
   )
