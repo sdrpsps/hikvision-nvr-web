@@ -12,7 +12,7 @@ import {
   type Request,
 } from "@playwright/test"
 import { Temporal } from "@js-temporal/polyfill"
-import { selectDate, selectOption } from "./controls"
+import { selectDate, selectOption, selectRecordingTime } from "./controls"
 
 type SourceSample = {
   pts: number
@@ -731,22 +731,18 @@ test.describe("real NVR browser recording and streaming exports", () => {
     await page.getByRole("button", { name: "播放倍速", exact: true }).click()
     await page.getByRole("button", { name: "4×", exact: true }).click()
     await page.getByRole("button", { name: "下载片段", exact: true }).click()
-    const start = page.getByRole("textbox", { name: "片段起点", exact: true })
-    const fileStart = Temporal.PlainDateTime.from(await start.inputValue())
-    await start.fill(
-      fileStart
-        .add({ seconds: 1 })
-        .toString({ smallestUnit: "second" })
-        .replace("T", " ")
+    const start = page.getByRole("button", { name: "片段起点", exact: true })
+    const fileStart = Temporal.PlainTime.from((await start.innerText()).trim())
+    await selectRecordingTime(
+      page,
+      "片段起点",
+      fileStart.add({ seconds: 1 }).toString({ smallestUnit: "second" })
     )
-    await page
-      .getByRole("textbox", { name: "片段终点", exact: true })
-      .fill(
-        fileStart
-          .add({ seconds: 8 })
-          .toString({ smallestUnit: "second" })
-          .replace("T", " ")
-      )
+    await selectRecordingTime(
+      page,
+      "片段终点",
+      fileStart.add({ seconds: 8 }).toString({ smallestUnit: "second" })
+    )
   }
 
   async function taskPanel(page: Page) {

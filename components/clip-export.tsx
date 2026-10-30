@@ -9,7 +9,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { RecordingTimePicker } from "@/components/recording/time-picker"
 import { Slider } from "@/components/ui/slider"
 import {
   Dialog,
@@ -26,6 +26,7 @@ import {
 } from "@/components/browser-save-provider"
 import { useFullscreenContainer } from "@/hooks/use-fullscreen-container"
 import { mediaClock } from "@/lib/browser-save/types"
+import { recordingTimeOfDay } from "@/lib/browser-save/recording-time"
 import { useClipSelection } from "@/hooks/use-clip-selection"
 
 export type ClipSource = {
@@ -50,8 +51,28 @@ export function ClipExport({
 }) {
   const { start } = useBrowserSaves()
   const [open, setOpen] = useState(false)
-  const { from, to, a, b, valid, max, error, clock, change, mark, selection } =
-    useClipSelection(source.fileStartAt, source.timeZone, duration)
+  const {
+    from,
+    to,
+    a,
+    b,
+    valid,
+    min,
+    max,
+    first,
+    last,
+    error,
+    clock,
+    clamp,
+    change,
+    mark,
+    selection,
+  } = useClipSelection(
+    source.fileStartAt,
+    source.timeZone,
+    duration,
+    source.date
+  )
   const id = useId()
   const portal = useFullscreenContainer(container)
   return (
@@ -77,8 +98,9 @@ export function ClipExport({
         <DialogHeader>
           <DialogTitle>下载录像片段</DialogTitle>
           <DialogDescription>
-            {source.channelName} · 录像时间（
-            {source.timeZone ?? "Asia/Shanghai"}）
+            {first && last
+              ? `片段范围：${recordingTimeOfDay(first, source.date)} — ${recordingTimeOfDay(last, source.date)}${duration === undefined ? "（文件终点待确认）" : ""}`
+              : "尚未确认当天可下载的录像范围。"}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -98,54 +120,48 @@ export function ClipExport({
           <ScrollArea className="save-setup-scroll">
             <FieldGroup className="save-setup-content gap-3">
               <SaveCapabilityNotice />
-              <Field data-invalid={!!error}>
-                <FieldLabel htmlFor={`${id}-start`}>录像开始时间</FieldLabel>
-                <div className="flex gap-2">
-                  <Input
-                    id={`${id}-start`}
-                    aria-label="片段起点"
-                    value={from}
-                    aria-invalid={!!error}
-                    placeholder="YYYY-MM-DD HH:mm:ss"
-                    onChange={(event) =>
-                      change("start", event.currentTarget.value)
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    aria-label="将当前位置设为起点"
-                    onClick={() => mark("start", position)}
-                  >
-                    <FlagIcon data-icon="inline-start" />
-                    设为起点
-                  </Button>
-                </div>
-              </Field>
-              <Field data-invalid={!!error}>
-                <FieldLabel htmlFor={`${id}-end`}>录像结束时间</FieldLabel>
-                <div className="flex gap-2">
-                  <Input
-                    id={`${id}-end`}
-                    aria-label="片段终点"
-                    value={to}
-                    aria-invalid={!!error}
-                    placeholder="YYYY-MM-DD HH:mm:ss"
-                    onChange={(event) =>
-                      change("end", event.currentTarget.value)
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    aria-label="将当前位置设为终点"
-                    onClick={() => mark("end", position)}
-                  >
-                    <FlagIcon data-icon="inline-start" />
-                    设为终点
-                  </Button>
-                </div>
-              </Field>
+              {(
+                [
+                  {
+                    which: "start",
+                    name: "起点",
+                    label: "录像开始时间",
+                    value: from,
+                  },
+                  {
+                    which: "end",
+                    name: "终点",
+                    label: "录像结束时间",
+                    value: to,
+                  },
+                ] as const
+              ).map(({ which, name, label, value }) => (
+                <Field key={which} data-invalid={!!error}>
+                  <FieldLabel htmlFor={`${id}-${which}`}>{label}</FieldLabel>
+                  <div className="flex gap-2">
+                    <RecordingTimePicker
+                      id={`${id}-${which}`}
+                      label={`片段${name}`}
+                      date={source.date}
+                      value={value}
+                      min={first}
+                      max={last}
+                      invalid={!!error}
+                      container={portal}
+                      onChange={(next) => change(which, next)}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      aria-label={`将当前位置设为${name}`}
+                      onClick={() => mark(which, position)}
+                    >
+                      <FlagIcon data-icon="inline-start" />
+                      设为{name}
+                    </Button>
+                  </div>
+                </Field>
+              ))}
               {max !== undefined &&
                 max > 0 &&
                 a !== undefined &&
@@ -155,20 +171,17 @@ export function ClipExport({
                     <FieldLabel>调整选区</FieldLabel>
                     <Slider
                       aria-label="下载选区"
-                      min={0}
+                      min={min}
                       max={max}
                       step={1}
                       value={[
-                        Math.max(0, Math.min(a, max)),
-                        Math.max(0, Math.min(b, max)),
+                        Math.max(min, Math.min(a, max)),
+                        Math.max(min, Math.min(b, max)),
                       ]}
                       onValueChange={(value) => {
                         if (!Array.isArray(value)) return
-                        change("start", clock(value[0]))
-                        change(
-                          "end",
-                          clock(Math.min(value[1], duration ?? max), "ceil")
-                        )
+                        change("start", clock(clamp(value[0])))
+                        change("end", clock(clamp(value[1]), "ceil"))
                       }}
                     />
                   </Field>
@@ -180,8 +193,7 @@ export function ClipExport({
                   size="xs"
                   disabled={a === undefined}
                   onClick={() => {
-                    if (a !== undefined)
-                      change("start", clock(Math.max(0, a - 30)))
+                    if (a !== undefined) change("start", clock(clamp(a - 30)))
                   }}
                 >
                   前扩 30 秒
@@ -193,27 +205,17 @@ export function ClipExport({
                   disabled={b === undefined}
                   onClick={() => {
                     if (b !== undefined)
-                      change(
-                        "end",
-                        clock(Math.min(duration ?? b + 30, b + 30), "ceil")
-                      )
+                      change("end", clock(clamp(b + 30), "ceil"))
                   }}
                 >
                   后扩 30 秒
                 </Button>
               </div>
               <FieldDescription>
-                {source.fileStartAt
-                  ? `可下载范围：${clock(0)}${duration === undefined ? " 起（终点待确认）" : ` — ${clock(duration, "ceil")}`}。`
-                  : "尚未确认录像文件的起始时间。"}
-                仅限当前录像文件，按以上时区输入完整日期和时分秒。
-              </FieldDescription>
-              <FieldDescription>
                 {a !== undefined && b !== undefined && valid
                   ? `时长 ${mediaClock(b - a)} · `
                   : ""}
-                原速，保留源音轨。
-                实际保存范围可能比选区略宽，时间以设备录像标记为准。
+                实际保存范围可能略宽。
               </FieldDescription>
               {error && (
                 <p role="alert" className="text-sm text-destructive">

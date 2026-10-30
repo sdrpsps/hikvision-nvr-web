@@ -1,5 +1,26 @@
 import { Temporal } from "@js-temporal/polyfill"
 
+export function recordingDayBounds(
+  fileStartAt: string,
+  date: string,
+  timeZone = "Asia/Shanghai",
+  duration?: number
+) {
+  const day = Temporal.PlainDate.from(date).toZonedDateTime(timeZone)
+  const origin = Date.parse(fileStartAt)
+  const start = Math.max(0, (day.epochMilliseconds - origin) / 1000)
+  const end = Math.min(
+    duration ?? Infinity,
+    (day.add({ days: 1 }).epochMilliseconds - origin) / 1000
+  )
+  return end > start ? { start, end } : undefined
+}
+
+export function recordingTimeOfDay(value: string, date: string) {
+  if (!value) return ""
+  return value.slice(0, 10) > date ? "24:00:00" : value.slice(11)
+}
+
 export function recordingTime(
   fileStartAt: string,
   seconds: number,

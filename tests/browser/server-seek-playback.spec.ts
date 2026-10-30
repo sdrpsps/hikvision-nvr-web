@@ -1,3 +1,4 @@
+import { selectRecordingTime } from "./controls"
 import { readFileSync } from "node:fs"
 import { test, expect, type Page } from "@playwright/test"
 import { splitFragmentedMp4 } from "../../server/mp4"
@@ -280,8 +281,8 @@ test.describe("SHTTP server-side seek", () => {
     await expect(page.getByLabel("当前回放时间")).toHaveText("00:20:00")
     await page.getByRole("button", { name: "下载片段", exact: true }).click()
     await page.getByRole("button", { name: "将当前位置设为起点" }).click()
-    await expect(page.getByLabel("片段起点")).toHaveValue("2026-10-25 00:20:00")
-    await page.getByLabel("片段终点").fill("2026-10-25 00:20:30")
+    await expect(page.getByLabel("片段起点")).toHaveText("00:20:00")
+    await selectRecordingTime(page, "片段终点", "00:20:30")
     await expect(
       page.getByRole("slider", { name: "下载选区" }).first()
     ).toHaveAttribute("max", "3660")

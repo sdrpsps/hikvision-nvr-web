@@ -9,7 +9,7 @@ import {
   type Page,
   type TestInfo,
 } from "@playwright/test"
-import { selectOption } from "./controls"
+import { selectOption, selectRecordingTime } from "./controls"
 import { splitFragmentedMp4, mp4Boxes } from "../../server/mp4"
 import {
   FragmentedMp4Demuxer,
@@ -872,29 +872,24 @@ test("history A/B validation and short original-speed export ignore playback spe
   await opfsPicker(page)
   await page.goto("/playback")
   await page.getByRole("button", { name: "播放", exact: true }).click()
+  await page.getByRole("button", { name: "暂停录像", exact: true }).click()
+  const sound = page.getByRole("switch", { name: "声音", exact: true })
+  if (await sound.isChecked()) await sound.click()
   await expect(
     page.getByRole("button", { name: "播放倍速", exact: true })
   ).toBeVisible()
   await page.getByRole("button", { name: "播放倍速", exact: true }).click()
   await page.getByRole("button", { name: "4×", exact: true }).click()
   await page.getByRole("button", { name: "下载片段", exact: true }).click()
-  await page
-    .getByRole("textbox", { name: "片段起点", exact: true })
-    .fill("2026-10-17 00:00:02")
-  await page
-    .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("2026-10-17 00:00:01")
+  await selectRecordingTime(page, "片段起点", "00:00:02")
+  await selectRecordingTime(page, "片段终点", "00:00:01")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await expect(
     page.getByRole("alert").filter({ hasText: "终点必须晚于起点" })
   ).toBeVisible()
   expect(source.requests).toHaveLength(0)
-  await page
-    .getByRole("textbox", { name: "片段起点", exact: true })
-    .fill("2026-10-17 00:00:01")
-  await page
-    .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("2026-10-17 00:00:02")
+  await selectRecordingTime(page, "片段起点", "00:00:01")
+  await selectRecordingTime(page, "片段终点", "00:00:02")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await page
     .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -968,20 +963,23 @@ test("fractional file end can be marked, extended and submitted without truncati
     video.dispatchEvent(new Event("timeupdate"))
   })
   await page.getByRole("button", { name: "下载片段", exact: true }).click()
-  const end = page.getByRole("textbox", { name: "片段终点", exact: true })
+  const end = page.getByRole("button", { name: "片段终点", exact: true })
   await page
     .getByRole("button", { name: "将当前位置设为终点", exact: true })
     .click()
-  await expect(end).toHaveValue("2026-10-17 00:00:03")
-  await end.fill("2026-10-17 00:00:01")
+  await expect(end).toHaveText("00:00:03")
+  await selectRecordingTime(page, "片段终点", "00:00:01")
   await page.getByRole("button", { name: "后扩 30 秒", exact: true }).click()
-  await expect(end).toHaveValue("2026-10-17 00:00:03")
-  await end.fill("2026-10-17 00:00:04")
-  await page.getByRole("button", { name: "保存选区", exact: true }).click()
-  await expect(
-    page.getByRole("alert").filter({ hasText: "超出当前录像文件范围" })
-  ).toBeVisible()
-  await end.fill("2026-10-17 00:00:03")
+  await expect(end).toHaveText("00:00:03")
+  await end.click()
+  const seconds = page.getByRole("spinbutton", {
+    name: "片段终点秒",
+    exact: true,
+  })
+  await expect(seconds).toHaveAttribute("aria-valuemax", "3")
+  await seconds.press("End")
+  await expect(seconds).toHaveAttribute("aria-valuenow", "3")
+  await page.getByRole("button", { name: "完成时间选择", exact: true }).click()
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await page
     .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -1106,12 +1104,8 @@ test("download activity remains visible while its dialog is closed and navigatio
     expect(source.requests).toHaveLength(0)
 
     await trigger.click()
-    await setup
-      .getByRole("textbox", { name: "片段起点", exact: true })
-      .fill("2026-10-17 00:00:00")
-    await setup
-      .getByRole("textbox", { name: "片段终点", exact: true })
-      .fill("2026-10-17 00:00:03")
+    await selectRecordingTime(page, "片段起点", "00:00:00")
+    await selectRecordingTime(page, "片段终点", "00:00:03")
     await setup.getByRole("button", { name: "保存选区", exact: true }).click()
     await expect(setup).toBeHidden()
     const activity = page.getByRole("region", {
@@ -1291,6 +1285,22 @@ test("save triggers align with existing controls and dialogs fit a 390px viewpor
   const clipBox = await clipDialog.boundingBox()
   expect(clipBox!.x).toBeGreaterThanOrEqual(0)
   expect(clipBox!.x + clipBox!.width).toBeLessThanOrEqual(390)
+  await clipDialog
+    .getByRole("button", { name: "片段终点", exact: true })
+    .click()
+  const clockPicker = page.getByRole("dialog", {
+    name: "选择片段终点",
+    exact: true,
+  })
+  await expect(clockPicker).toBeVisible()
+  const pickerBox = await clockPicker.boundingBox()
+  expect(pickerBox!.x).toBeGreaterThanOrEqual(0)
+  expect(pickerBox!.x + pickerBox!.width).toBeLessThanOrEqual(390)
+  await expect(clockPicker.getByRole("spinbutton")).toHaveCount(3)
+  await expect(clockPicker.getByRole("grid")).toHaveCount(0)
+  await clockPicker
+    .getByRole("button", { name: "完成时间选择", exact: true })
+    .click()
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth)
   ).toBeLessThanOrEqual(390)
@@ -1395,6 +1405,32 @@ test("fullscreen keeps the recording indicator visible and contains task and cli
       document.fullscreenElement?.contains(element)
     )
   ).toBe(true)
+  await clip.getByRole("button", { name: "片段终点", exact: true }).click()
+  const clockPicker = page.getByRole("dialog", {
+    name: "选择片段终点",
+    exact: true,
+  })
+  await expect(clockPicker).toBeVisible()
+  expect(
+    await clockPicker.evaluate((element) =>
+      document.fullscreenElement?.contains(element)
+    )
+  ).toBe(true)
+  const seconds = page.getByRole("spinbutton", {
+    name: "片段终点秒",
+    exact: true,
+  })
+  expect(
+    await seconds.evaluate((element) =>
+      document.fullscreenElement?.contains(element)
+    )
+  ).toBe(true)
+  await seconds.focus()
+  await seconds.press("Home")
+  await expect(seconds).toHaveAttribute("aria-valuenow", "0")
+  await clockPicker
+    .getByRole("button", { name: "完成时间选择", exact: true })
+    .click()
   await page.keyboard.press("Escape")
   await expect(clip).toBeHidden()
   await page.evaluate(() => document.exitFullscreen())
@@ -1446,9 +1482,7 @@ test("four concurrent saves reject a fifth task and stop independently before cl
     name: "下载录像片段",
     exact: true,
   })
-  await clip
-    .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("2026-10-17 00:00:03")
+  await selectRecordingTime(page, "片段终点", "00:00:03")
   await clip.getByRole("button", { name: "保存选区", exact: true }).click()
   await expect(
     page.locator('[data-sonner-toast][data-type="warning"]')
@@ -1497,6 +1531,45 @@ test("four concurrent saves reject a fifth task and stop independently before cl
 
 test.describe("recording clock download selection", () => {
   test.use({ timezoneId: "America/Los_Angeles" })
+
+  test("selects hours, minutes and seconds without a date field and supports the day-end boundary", async ({
+    page,
+  }) => {
+    await queries(page, 90000, "2026-10-16T15:59:59Z")
+    await page.goto("/playback")
+    await page.getByRole("button", { name: "播放", exact: true }).click()
+    const video = page.locator("video")
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.readyState)
+      )
+      .toBeGreaterThanOrEqual(2)
+    await video.evaluate((element: HTMLVideoElement) => element.pause())
+    await page.getByRole("button", { name: "下载片段", exact: true }).click()
+    const dialog = page.getByRole("dialog", {
+      name: "下载录像片段",
+      exact: true,
+    })
+    await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+      "片段范围：00:00:00 — 24:00:00"
+    )
+    await expect(dialog).toContainText("00:00:00 — 24:00:00")
+    await expect(dialog.getByRole("textbox")).toHaveCount(0)
+    await selectRecordingTime(page, "片段起点", "01:02:03")
+    await selectRecordingTime(page, "片段终点", "24:00:00")
+    await page.getByRole("button", { name: "片段终点", exact: true }).click()
+    const minutes = page.getByRole("spinbutton", {
+      name: "片段终点分",
+      exact: true,
+    })
+    await expect(minutes).toHaveAttribute("aria-valuemax", "0")
+    await minutes.press("End")
+    await expect(minutes).toHaveAttribute("aria-valuenow", "0")
+    await page
+      .getByRole("button", { name: "完成时间选择", exact: true })
+      .click()
+    await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  })
 
   test("uses the complete file clock across midnight and rejects invalid ranges before saving", async ({
     page,
@@ -1554,34 +1627,32 @@ test.describe("recording clock download selection", () => {
     const start = dialog.getByLabel("片段起点")
     const end = dialog.getByLabel("片段终点")
     const submit = dialog.getByRole("button", { name: "保存选区", exact: true })
-    await expect(start).toHaveValue("2026-10-16 23:59:59")
-    await expect(dialog).toContainText("Asia/Shanghai")
-    await expect(dialog).toContainText(
-      "2026-10-16 23:59:59 — 2026-10-17 00:00:02"
+    await expect(start).toHaveText("00:00:00")
+    await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+      "片段范围：00:00:00 — 00:00:02"
     )
-    for (const value of [
-      "",
-      "00:00:00",
-      "2026-02-30 00:00:00",
-      "2026-10-16 23:59:58",
-      "2026-10-17 00:00:02",
-    ]) {
-      await start.fill(value)
-      await submit.click()
-      await expect(dialog.getByRole("alert")).toBeVisible()
-      expect(source.requests).toHaveLength(0)
-    }
+    await expect(dialog).toContainText("00:00:00 — 00:00:02")
+    await expect(dialog.getByRole("textbox")).toHaveCount(0)
+    await selectRecordingTime(page, "片段起点", "00:00:02")
+    await submit.click()
+    await expect(dialog.getByRole("alert")).toContainText("终点必须晚于起点")
+    expect(source.requests).toHaveLength(0)
     await page
       .getByRole("button", { name: "将当前位置设为起点", exact: true })
       .click()
-    await expect(start).toHaveValue("2026-10-17 00:00:00")
-    await end.fill("2026-10-17 00:00:03")
-    await submit.click()
-    await expect(dialog.getByRole("alert")).toContainText(
-      "超出当前录像文件范围"
-    )
-    expect(source.requests).toHaveLength(0)
-    await end.fill("2026-10-17 00:00:01")
+    await expect(start).toHaveText("00:00:00")
+    await end.click()
+    const seconds = page.getByRole("spinbutton", {
+      name: "片段终点秒",
+      exact: true,
+    })
+    await expect(seconds).toHaveAttribute("aria-valuemax", "2")
+    await seconds.press("End")
+    await expect(seconds).toHaveAttribute("aria-valuenow", "2")
+    await page
+      .getByRole("button", { name: "完成时间选择", exact: true })
+      .click()
+    await selectRecordingTime(page, "片段终点", "00:00:01")
     await submit.click()
     await page
       .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -1609,3 +1680,136 @@ test.describe("recording clock download selection", () => {
     ).toEqual([{ start: 1, end: 2 }])
   })
 })
+
+for (const touch of [false, true]) {
+  test.describe(`time wheel gestures ${touch ? "touch" : "desktop"}`, () => {
+    test.use({
+      hasTouch: touch,
+      isMobile: touch,
+      reducedMotion: touch ? "reduce" : "no-preference",
+      viewport: touch
+        ? { width: 390, height: 844 }
+        : { width: 1440, height: 1000 },
+    })
+    test("wheel and drag retain selected seconds while playback updates", async ({
+      page,
+    }, info) => {
+      await queries(page, 3600)
+      await page.goto("/playback")
+      await page.getByRole("button", { name: "播放", exact: true }).click()
+      const video = page.locator("video")
+      await video.evaluate((element: HTMLVideoElement) => {
+        element.loop = true
+      })
+      await expect
+        .poll(() =>
+          video.evaluate(
+            (element: HTMLVideoElement) =>
+              element.getVideoPlaybackQuality().totalVideoFrames
+          )
+        )
+        .toBeGreaterThan(2)
+      await page.getByRole("button", { name: "下载片段", exact: true }).click()
+      await page.getByRole("button", { name: "片段终点", exact: true }).click()
+      const picker = page.getByRole("dialog", {
+        name: "选择片段终点",
+        exact: true,
+      })
+      const seconds = picker.getByRole("spinbutton", {
+        name: "片段终点秒",
+        exact: true,
+      })
+      await expect(seconds).toHaveAttribute("aria-valuenow", "30")
+      const firstHighlight = picker
+        .locator("[data-rwp-highlight-wrapper]")
+        .first()
+      await expect(firstHighlight).toHaveCSS("box-shadow", "none")
+      await expect(picker.getByRole("combobox")).toHaveCount(0)
+      const box = await seconds.boundingBox()
+      const x = box!.x + box!.width / 2
+      const y = box!.y + box!.height / 2
+      if (!touch) {
+        await seconds.hover()
+        await page.mouse.wheel(0, 100)
+        await expect(seconds).toHaveAttribute("aria-valuenow", "31")
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x, y - 48, { steps: 8 })
+        await page.mouse.up()
+      } else {
+        const cdp = await page.context().newCDPSession(page)
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [{ x, y }],
+        })
+        for (let step = 1; step <= 8; step++)
+          await cdp.send("Input.dispatchTouchEvent", {
+            type: "touchMove",
+            touchPoints: [{ x, y: y - step * 6 }],
+          })
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchEnd",
+          touchPoints: [],
+        })
+        await cdp.detach()
+      }
+      await expect
+        .poll(async () => Number(await seconds.getAttribute("aria-valuenow")))
+        .toBeGreaterThan(touch ? 30 : 31)
+      await seconds.focus()
+      await seconds.press("Home")
+      await expect(seconds).toHaveAttribute("aria-valuenow", "0")
+      await expect(
+        seconds.locator("[data-rwp-highlight-wrapper]")
+      ).not.toHaveCSS("box-shadow", "none")
+      await seconds.press("ArrowDown")
+      await expect(seconds).toHaveAttribute("aria-valuenow", "1")
+      const frames = await video.evaluate(
+        (element: HTMLVideoElement) =>
+          element.getVideoPlaybackQuality().totalVideoFrames
+      )
+      await expect
+        .poll(() =>
+          video.evaluate(
+            (element: HTMLVideoElement) =>
+              element.getVideoPlaybackQuality().totalVideoFrames
+          )
+        )
+        .toBeGreaterThan(frames + 10)
+      await expect(seconds).toHaveAttribute("aria-valuenow", "1")
+      await picker.screenshot({ path: info.outputPath("time-wheel.png") })
+      await picker
+        .getByRole("button", { name: "完成时间选择", exact: true })
+        .click()
+      await expect(
+        page.getByRole("button", { name: "片段终点", exact: true })
+      ).toHaveText("00:00:01")
+      if (!touch) {
+        const trigger = page.getByRole("button", {
+          name: "片段终点",
+          exact: true,
+        })
+        await trigger.click()
+        await seconds.hover()
+        await page.mouse.wheel(0, 100)
+        await picker
+          .getByRole("button", { name: "完成时间选择", exact: true })
+          .click()
+        const committed = await trigger.innerText()
+        const atClose = await video.evaluate(
+          (element: HTMLVideoElement) =>
+            element.getVideoPlaybackQuality().totalVideoFrames
+        )
+        await expect
+          .poll(() =>
+            video.evaluate(
+              (element: HTMLVideoElement) =>
+                element.getVideoPlaybackQuality().totalVideoFrames
+            )
+          )
+          .toBeGreaterThan(atClose + 25)
+        await expect(trigger).toHaveText(committed)
+      }
+    })
+  })
+}

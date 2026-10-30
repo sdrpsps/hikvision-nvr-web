@@ -3,12 +3,40 @@ import {
   recordingOffset,
   recordingRange,
   recordingTime,
+  recordingDayBounds,
+  recordingTimeOfDay,
 } from "../lib/browser-save/recording-time"
 
 afterEach(() => vi.unstubAllEnvs())
 
 describe("clip selection by recording time", () => {
   const fileStartAt = "2026-10-24T15:59:00Z"
+  it("limits a cross-midnight file to the selected recording day", () => {
+    expect(
+      recordingDayBounds(fileStartAt, "2026-10-25", "Asia/Shanghai", 3660)
+    ).toEqual({ start: 60, end: 3660 })
+    expect(
+      recordingDayBounds(fileStartAt, "2026-10-25", "Asia/Shanghai", 90000)
+    ).toEqual({ start: 60, end: 86460 })
+    expect(
+      recordingDayBounds(fileStartAt, "2026-10-26", "Asia/Shanghai", 3660)
+    ).toBeUndefined()
+    expect(recordingTimeOfDay("2026-10-25 13:20:30", "2026-10-25")).toBe(
+      "13:20:30"
+    )
+    expect(recordingTimeOfDay("2026-10-26 00:00:00", "2026-10-25")).toBe(
+      "24:00:00"
+    )
+  })
+  it("uses the device's calendar day including DST boundaries", () => {
+    expect(
+      recordingDayBounds(
+        "2026-03-08T05:00:00Z",
+        "2026-03-08",
+        "America/New_York"
+      )
+    ).toEqual({ start: 0, end: 23 * 3600 })
+  })
   it.each(["UTC", "America/Los_Angeles", "Asia/Tokyo"])(
     "uses the recording zone instead of system zone %s",
     (zone) => {
