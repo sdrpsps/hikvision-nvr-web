@@ -33,10 +33,11 @@ export function usePlaybackPosition({
   const [historyReady, setHistoryReady] = useState(false)
   const [duration, setDuration] = useState(0)
   const recorded = "durationSeconds" in session ? session : undefined
-  const fileStart = recorded?.fileRange?.startAt
+  const mediaStart = recorded?.mediaStartAt ?? recorded?.fileRange?.startAt
+  const serverSeek = recorded?.source === "shttp"
   const [initialOffset] = useState(() =>
-    requestedTime && fileStart
-      ? Math.max(0, playbackOffset(requestedTime.at, fileStart))
+    requestedTime && mediaStart
+      ? Math.max(0, playbackOffset(requestedTime.at, mediaStart))
       : (recorded?.startOffsetSeconds ?? 0)
   )
   const lastRequest = useRef(requestedTime?.revision)
@@ -58,12 +59,13 @@ export function usePlaybackPosition({
   )
   const publishPosition = useCallback(
     (seconds: number) => {
+      if (serverSeek && requestedTime?.revision !== lastRequest.current) return
       setPosition(seconds)
       onPlaybackTimeChange?.(
-        fileStart ? playbackInstant(fileStart, seconds) : undefined
+        mediaStart ? playbackInstant(mediaStart, seconds) : undefined
       )
     },
-    [fileStart, onPlaybackTimeChange]
+    [mediaStart, onPlaybackTimeChange, requestedTime?.revision, serverSeek]
   )
   const cancelSeek = () => {
     if (initialSeek.current) {
@@ -160,12 +162,13 @@ export function usePlaybackPosition({
     [applyPendingSeek, onPlaybackTimeChange, videoRef]
   )
   useEffect(() => {
+    if (serverSeek) return
     if (!requestedTime || requestedTime.revision === lastRequest.current) return
     lastRequest.current = requestedTime.revision
-    if (!fileStart) return
-    const seconds = playbackOffset(requestedTime.at, fileStart)
+    if (!mediaStart) return
+    const seconds = playbackOffset(requestedTime.at, mediaStart)
     queueMicrotask(() => requestSeek(seconds))
-  }, [requestedTime, fileStart, requestSeek])
+  }, [requestedTime, mediaStart, requestSeek, serverSeek])
   useEffect(() => {
     if (pendingSeek === null) return
     const timer = setInterval(applyPendingSeek, 250)

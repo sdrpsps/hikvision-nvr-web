@@ -225,7 +225,11 @@ describe("full-file duration estimates", () => {
       await expect(
         service.resolveSegment(source.trackId, date, result.segments[0].id)
       ).resolves.toEqual(source)
-      expect(query).toHaveBeenCalledExactlyOnceWith(source.trackId, date)
+      expect(query).toHaveBeenCalledExactlyOnceWith(
+        source.trackId,
+        date,
+        undefined
+      )
     } finally {
       now.mockRestore()
     }

@@ -132,8 +132,10 @@ When saving to a folder is supported, recordings are split into files approximat
 ### Find recordings and download clips
 
 1. Open **Recorded playback** (录像回放) and choose a camera and date.
-2. Click the central play button to start the day's first recording segment. Alternatively, click or drag the player's full-day timeline; releasing seeks and plays, including when paused or before playback has started. Selecting a segment from the list starts it immediately. Seeking within the same file reuses the current playback session.
+2. Click the central play button to start the day's first recording segment. Alternatively, click or drag the player's full-day timeline; releasing seeks and plays, including when paused or before playback has started. Selecting a segment from the list starts it immediately.
 3. Choose **Download clip** (下载片段), set the start and end, and select a destination.
+
+On devices supporting SHTTP time-based playback, the server starts reading near the selected time at a keyframe, then seeks to the target without downloading the preceding hours of the file. A new target within the same file releases the old session before opening a new time-based stream. Devices explicitly lacking support retain HTTP file playback: only already-read content can be sought directly, so later targets may still wait for the preceding content. Authentication, protocol, or clock-validation failures on a supported device produce an error rather than silently falling back to a slow full-file download.
 
 Clip boundaries are **positions within the current file**. For example, `02:00` to `03:00` means from two to three minutes after the file starts, not 2–3 a.m. Beijing time. Mark the current position or enter `minutes:seconds` or `hours:minutes:seconds`. Once the full file duration is known, you can also drag the selection.
 
@@ -143,9 +145,9 @@ Downloads preserve the original speed and supported audio from the source. Playb
 
 Click the video to pause and the central button to resume. A loading indicator appears while connecting, buffering, or seeking. Opening the page does not start a stream. When the current segment ends and has been fully read, the old session is released before playback automatically advances to the day's next segment, retaining speed and audio preferences. Gaps are indicated, and playback stops after the last segment. Closing playback, changing the query, or a playback failure cancels advancement; there is no separate continuous-playback switch.
 
-Playback has one full-day timeline inside the player, including fullscreen. Its cursor follows the displayed frame time. Dragging shows the target time; releasing seeks and plays. A time with no footage produces a notice and leaves the current position unchanged. The interface does not duplicate the day's coverage, selected time, or full file range elsewhere. Media offsets still use the complete file start recovered by the server. While waiting for a target that has not yet been read, the player frame and waiting/cancel controls remain visible. Unconfirmed file times produce an explicit error.
+Playback has one full-day timeline inside the player, including fullscreen. Its cursor follows the displayed frame time. Dragging shows the target time; releasing seeks and plays. A time with no footage produces a notice and leaves the current position unchanged. The interface does not duplicate the day's coverage, selected time, or full file range elsewhere. HTTP file playback uses the complete file start recovered by the server. SHTTP establishes the media origin from the device's frame-time marker and a verified first frame, rather than assuming the returned stream starts exactly at the requested time. While waiting for a target that has not yet been read, the player frame and waiting/cancel controls remain visible. Unconfirmed file or frame times produce an explicit error.
 
-Clock mapping relies on the device's file labels. Second-level agreement between those labels and the video OSD, and integration with native Safari playback, still need validation. Download selections continue to use file-relative times.
+Device absolute-time markers have one-second precision; subsecond agreement with the video OSD is not guaranteed. Integration with native Safari playback still needs validation. Download selections continue to use positions relative to the complete file, not the current viewing window.
 
 ## Saved files and data flow
 
@@ -155,7 +157,7 @@ Saving receives, processes, and writes data incrementally instead of collecting 
 
 The server connects to the NVR and forwards data; live streams also use FFmpeg to remux the transport format. The browser creates the final recording and download files. **Recorded playback does keep controlled temporary fragments on the server to support seeking**, with cleanup when closed or expired.
 
-If the device only supports sequential reads from the beginning of a file, downloading a later clip must first read the preceding content. Selecting a short clip therefore does not guarantee immediate disk writes or that only the selected range travels over the network.
+Clip downloads still read the original file-download interface, not the SHTTP viewing window. If the device only supports sequential reads from the beginning of a file, downloading a later clip must first read the preceding content. Even when viewing can seek quickly, selecting a short clip download does not guarantee immediate disk writes or that only the selected range travels over the network.
 
 With native browser downloads, including Safari's path, check the browser's download list after the application reports **Transfer complete** (传送完成) to confirm that the file has finished downloading. Some players may not immediately show the duration of these MKV files, and seeking compatibility varies.
 
@@ -165,7 +167,7 @@ The documented real-device checks used a Hikvision **`DS-7816NB-K2/16P`** with f
 
 | Browser | Reported verification scope |
 | --- | --- |
-| Desktop Chrome | Real-device live viewing, full recording playback, live recording, and clip downloads; a 30-minute single-channel recording, 5-minute segmentation, and independently stopping two simultaneous recordings were checked. |
+| Desktop Chrome | Real-device live viewing, full recording playback, live recording, and clip downloads; SHTTP time-based starts near a file's end, same-file reseeking, and session release; a 30-minute single-channel recording, 5-minute segmentation, and independently stopping two simultaneous recordings were checked. |
 | Safari 27.0.1 | Short single-channel HEVC live viewing; short recordings, clip downloads, cancellation, channel/layout changes, in-app navigation, and brief backgrounding while saving were checked. Full playback combined with audio, seeking, and fullscreen, plus long-running or multi-channel saving, remain unverified. |
 | Edge | Not separately tested. |
 
@@ -173,7 +175,7 @@ Additional limitations:
 
 - A 16-pane interface does not mean stable simultaneous playback of 16 real cameras has been verified. Device streaming capacity, network conditions, and client decoding performance all matter.
 - 60-minute recordings, long-running multi-channel saving, and file recovery after sleep or crashes remain unverified. Browser recording is for occasional local copies; the NVR remains responsible for continuous recording.
-- Historical playback uses the device's HTTP file-download interface. The standard historical RTSP path is not working yet. Automatic advancement is implemented, but real-device file transitions and long-term stability still need acceptance testing. Seamless transitions between files are not guaranteed.
+- Supported devices use SHTTP time-based playback; other devices retain HTTP file playback. SHTTP is a vendor-specific protocol, not standard RTSP, and the standard historical RTSP path is still not working. Automatic advancement is implemented, but real-device file transitions and long-term stability still need acceptance testing. Seamless transitions between files are not guaranteed.
 - There is no application login or user account system. Use a trusted network. If you add network or reverse-proxy access restrictions, cover pages, APIs, and media resources; same-origin checks are not authentication. Do not expose NVR management or RTSP ports directly to the public internet.
 
 ## Development

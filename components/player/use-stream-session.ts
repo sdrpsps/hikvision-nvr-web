@@ -26,6 +26,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
   const releasingPlayback = useRef<{
     id: string
     restartRevision?: number
+    restartRequested?: boolean
   } | null>(null)
   const lastStartRequest = useRef<number | undefined>(undefined)
   const automaticallyStarted = useRef(false)
@@ -34,9 +35,15 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     callbacks.current = props
   })
   const [session, setSession] = useState<Preview | LiveStream>()
+  const [sessionRevision, setSessionRevision] = useState<number>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [expired, setExpired] = useState(false)
+  const requestedRevision = props.requestedTime?.revision
+  const serverSeek =
+    !!session && "source" in session && session.source === "shttp"
+  // A server-side seek owns a new media clock, not a seek on the old source.
+  const replacingPlayback = serverSeek && sessionRevision !== requestedRevision
   const notifyError = useCallback(
     (message: string) => {
       toast.error(message, {
@@ -50,7 +57,9 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     data: playbackStatus,
     error: statusError,
     confirm: confirmPlayback,
-  } = usePlaybackStatus(!live && !expired ? session?.id : undefined)
+  } = usePlaybackStatus(
+    !live && !expired && !replacingPlayback ? session?.id : undefined
+  )
   useEffect(() => {
     callbacks.current.onActivityChange?.(loading || !!session)
   }, [loading, session])
@@ -152,7 +161,36 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
   const sourceDate = props.live ? undefined : props.date
   const sourceSegment = props.live ? undefined : props.segmentId
   const prepare = useCallback(async () => {
+    if (!live && serverSeek && activeId.current) {
+      ending.current?.abort()
+      ending.current = null
+      const pending = releasingPlayback.current
+      if (pending) {
+        pending.restartRequested = true
+        pending.restartRevision = callbacks.current.requestedTime?.revision
+        setSession(undefined)
+        setLoading(true)
+        callbacks.current.onPlaybackTimeChange?.(undefined)
+        return
+      }
+      const handoff = { id: activeId.current }
+      releasingPlayback.current = handoff
+      setSession(undefined)
+      setLoading(true)
+      callbacks.current.onPlaybackTimeChange?.(undefined)
+      const released = await release(handoff.id)
+      if (releasingPlayback.current !== handoff) return
+      releasingPlayback.current = null
+      if (!released) {
+        setLoading(false)
+        onError("无法关闭上一段录像，请重试。")
+        return
+      }
+      if (activeId.current !== handoff.id) return
+      activeId.current = null
+    }
     close()
+    const target = callbacks.current.requestedTime
     const controller = new AbortController()
     request.current = controller
     setLoading(true)
@@ -163,9 +201,14 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
             track,
             date: sourceDate!,
             segmentId: sourceSegment!,
+            at: target?.at,
             signal: controller.signal,
           })
-      if (controller.signal.aborted) {
+      if (
+        controller.signal.aborted ||
+        (!live &&
+          target?.revision !== callbacks.current.requestedTime?.revision)
+      ) {
         void release(session.id)
         return
       }
@@ -180,6 +223,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         )
       }
       activeId.current = session.id
+      setSessionRevision(target?.revision)
       setSession(session)
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -203,12 +247,12 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     createPlayback,
     release,
     live,
+    serverSeek,
     track,
     sourceDate,
     sourceSegment,
     onError,
   ])
-  const requestedRevision = props.requestedTime?.revision
   useEffect(() => {
     if (live) return
     let cancelled = false
@@ -232,13 +276,30 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
           setLoading(true)
           return
         }
+        if (request.current) {
+          request.current.abort()
+          void prepare()
+          return
+        }
+        if (serverSeek && activeId.current) {
+          void prepare()
+          return
+        }
       }
       if (!activeId.current && !request.current) void prepare()
     })
     return () => {
       cancelled = true
     }
-  }, [props.autoStart, requestedRevision, live, prepare])
+  }, [
+    props.autoStart,
+    requestedRevision,
+    live,
+    serverSeek,
+    prepare,
+    release,
+    onError,
+  ])
   async function finishPlayback() {
     const id = activeId.current
     if (
@@ -262,13 +323,17 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         return
       }
       if (!callbacks.current.onPlaybackEnded) return
-      const handoff: { id: string; restartRevision?: number } = { id }
+      const handoff: {
+        id: string
+        restartRevision?: number
+        restartRequested?: boolean
+      } = { id }
       releasingPlayback.current = handoff
       const released = await release(id)
       if (releasingPlayback.current !== handoff) return
       releasingPlayback.current = null
       if (
-        handoff.restartRevision !== undefined &&
+        (handoff.restartRequested || handoff.restartRevision !== undefined) &&
         handoff.restartRevision === callbacks.current.requestedTime?.revision &&
         activeId.current === id
       ) {
@@ -302,8 +367,8 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
   return {
     track,
     live,
-    session,
-    loading,
+    session: replacingPlayback ? undefined : session,
+    loading: loading || replacingPlayback,
     error,
     expired,
     playbackStatus,

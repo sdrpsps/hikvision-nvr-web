@@ -8,6 +8,30 @@ import { coverageAndGaps, dayRange, recordingSearchTime } from "./time"
 import { buildSearch, parseDevice, parseSearch, type RawSegment } from "./xml"
 import type { Recordings } from "../shared/contracts"
 
+function waitForChannels<T>(pending: Promise<T>, signal?: AbortSignal) {
+  if (!signal) return pending
+  // Channel reads are shared. Cancel only this query's wait, not other callers.
+  return new Promise<T>((resolve, reject) => {
+    const clear = () => signal.removeEventListener("abort", abort)
+    const abort = () => {
+      clear()
+      reject(signal.reason)
+    }
+    signal.addEventListener("abort", abort, { once: true })
+    pending.then(
+      (value) => {
+        clear()
+        resolve(value)
+      },
+      (error: unknown) => {
+        clear()
+        reject(error)
+      }
+    )
+    if (signal.aborted) abort()
+  })
+}
+
 export function validatePlaybackUri(uri: string, config: NvrConfig) {
   try {
     const url = new URL(uri)
@@ -68,13 +92,18 @@ export class NvrService {
     date: string,
     signal?: AbortSignal
   ): Promise<RawSegment[]> {
+    signal?.throwIfAborted()
     if (this.active >= 2)
       throw new AppError("NVR_BUSY", 429, "设备查询繁忙，请稍后重试。")
     this.active++
     const deadline = Date.now() + 30000
     try {
       signal?.throwIfAborted()
-      if (!(await this.channels()).some((channel) => channel.id === trackId))
+      if (
+        !(await waitForChannels(this.channels(), signal)).some(
+          (channel) => channel.id === trackId
+        )
+      )
         throw new AppError("TRACK_NOT_FOUND", 404, "设备中不存在此录像轨道。")
       const range = dayRange(date, this.config.NVR_TIME_ZONE)
       const time = {
@@ -159,9 +188,14 @@ export class NvrService {
       this.active--
     }
   }
-  async resolveSegment(trackId: string, date: string, id: string) {
+  async resolveSegment(
+    trackId: string,
+    date: string,
+    id: string,
+    signal?: AbortSignal
+  ) {
     const started = Date.now()
-    const segment = (await this.queryRaw(trackId, date)).find(
+    const segment = (await this.queryRaw(trackId, date, signal)).find(
       (segment) =>
         createHmac("sha256", this.key)
           .update(segment.playbackURI)
@@ -177,8 +211,10 @@ export class NvrService {
     const fileRange = await this.resolveFileRange(
       segment,
       date,
-      Date.now() - started < 5000
+      Date.now() - started < 5000,
+      signal
     )
+    signal?.throwIfAborted()
     return fileRange === undefined
       ? segment
       : {
@@ -196,7 +232,8 @@ export class NvrService {
   private async resolveFileRange(
     segment: RawSegment,
     date: string,
-    allowNeighbors: boolean
+    allowNeighbors: boolean,
+    signal?: AbortSignal
   ) {
     const range = dayRange(date, this.config.NVR_TIME_ZONE)
     const start = Date.parse(segment.startAt)
@@ -232,9 +269,12 @@ export class NvrService {
         dates.push(day.add({ days: 1 }).toString())
       const controller = new AbortController()
       timeout = setTimeout(() => controller.abort(), 1500)
+      const querySignal = signal
+        ? AbortSignal.any([signal, controller.signal])
+        : controller.signal
       const neighbors = await Promise.allSettled(
         dates.map((neighbor) =>
-          this.queryRaw(segment.trackId, neighbor, controller.signal)
+          this.queryRaw(segment.trackId, neighbor, querySignal)
         )
       )
       const intervals = [{ start, end }]

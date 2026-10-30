@@ -287,7 +287,8 @@ describe("preview lifecycle and API", () => {
       expect(resolve).toHaveBeenCalledExactlyOnceWith(
         body.track,
         body.date,
-        body.segmentId
+        body.segmentId,
+        undefined
       )
       expect(
         (await app.request(json.playlistUrl)).headers.get("cache-control")

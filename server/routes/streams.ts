@@ -54,13 +54,14 @@ export function createStreamRoutes(
     if (!parsed.success)
       throw new AppError("INVALID_BODY", 400, "请提供合法轨道、日期和录像 ID。")
     const service = getService(),
-      { track, date, segmentId } = parsed.data
+      { track, date, segmentId, at } = parsed.data
     return c.json(
       previewSchema.parse(
         await previews.create(
           service.config,
-          () => service.resolveSegment(track, date, segmentId),
-          c.req.raw.signal
+          (signal) => service.resolveSegment(track, date, segmentId, signal),
+          c.req.raw.signal,
+          at
         )
       ),
       201

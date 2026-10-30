@@ -11,6 +11,7 @@ import { toast } from "sonner"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
 import type { ClipSource } from "@/components/clip-export"
 import type { PlaybackTimeRequest } from "@/lib/playback-clock"
+import { playbackOffset } from "@/lib/playback-clock"
 import {
   LiveRecordingIndicator,
   SaveFullscreenActivity,
@@ -102,6 +103,14 @@ export function HlsVideo({
     onError,
     reportError,
   })
+  const recording = "durationSeconds" in session ? session : undefined
+  const serverSeek = recording?.source === "shttp"
+  const fileOffset =
+    recording?.mediaStartAt && recording.fileRange
+      ? playbackOffset(recording.mediaStartAt, recording.fileRange.startAt)
+      : 0
+  const fileDuration =
+    recording?.fileDurationSeconds ?? (serverSeek ? undefined : totalDuration)
   function togglePlayback() {
     const element = video.current
     if (!element) return
@@ -198,8 +207,8 @@ export function HlsVideo({
         setRate={setRate}
         sound={sound}
         toggleSound={toggleSound}
-        position={position}
-        totalDuration={totalDuration}
+        position={position + fileOffset}
+        totalDuration={fileDuration}
         clipSource={clipSource}
         actions={actions}
         onPreferencesChange={onPreferencesChange}

@@ -43,7 +43,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 沿用 Next.js App Router、React、TypeScript、pnpm 和 Zod；Hono 挂载于 `app/api/[[...route]]/route.ts`，仅一个 Next.js 实例、Node.js Runtime，Route Handler 只适配请求，设备业务位于 `server/`。
 - UI 沿用 shadcn/Base UI、Sonner；业务请求使用 TanStack Query hooks，保留契约校验、取消和超时，不自动重试或因窗口聚焦刷新。nuqs 保存页面选择，打开页面/链接不自动取流。
 - 不做网页登录、用户账号或应用登录会话鉴权；NVR 参数与凭据仅从服务端环境变量读取（本地可用 `.env`），保留设备 Digest 认证。开发和生产启动使用 Next.js 默认监听地址。
-- 实时源为 RTSP，历史回放为 ISAPI HTTP 文件下载。服务端只做 stream copy/封装，H.264/H.265 和 G.711 由浏览器本机处理，不自动回退到服务端转码。
+- 实时源为 RTSP；历史回放在设备明确支持时使用 SHTTP 按时间取流，明确不支持时保留 ISAPI HTTP 文件下载，片段保存仍走原文件下载。服务端只做 stream copy/封装，H.264/H.265 和 G.711 由浏览器本机处理，不自动回退到服务端转码。
 - 浏览器 Worker 增量封装 MKV，保存任务跨应用内导航存活；观看倍速、暂停或静音不改变成品。当前 A/B 导出仅限文件相对时间，不承诺北京时间精确裁剪或跨文件导出。
 - NVR 继续负责录像和存储。除通道改名外只读访问设备；改名通过显式 `SrcChannel` 映射读取单通道原配置，仅修改 `name`、PUT 后读回确认，不修改 OSD 或其他字段。
 
@@ -52,6 +52,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - XML 使用解析器处理命名空间、实体和可选字段；保留原厂 `searchResultPostion` 拼写。处理搜索分页、重复段与缺口；`Enable=false` 不代表没有录像，搜索编码不能代替实际媒体编码。
 - 查询和显示默认 `Asia/Shanghai`，内部/API 使用 UTC，不依赖系统本地时区。`NVR_RECORDING_TIME_MODE=device-local` 仅在搜索边界适配带 Z 的设备本地时间，显式偏移保持原义；标准 UTC 固件可用 `utc`。
 - 按完整 `fileRange.startAt` 计算媒体偏移，不使用被查询边界裁剪的起点。设备标签映射不等于已验证 OSD 秒级绝对精度。
+- SHTTP 通道通过可信 `SrcChannel` 和设备能力映射，不硬编码起始通道；SDK 起止时间按 `NVR_TIME_ZONE` 的本地墙钟编码。按 HK/PS 时钟及首个 IDR 内容证明实际媒体零点，不把请求时刻当作返回首帧时间；绝对时钟仅秒级精度。重新定位须先确认释放旧会话，设备声明支持后的认证、协议或时钟错误不得静默回退整文件下载。
 - 标准历史 RTSP 仍阻塞于 DESCRIBE 400，不影响已有 HTTP 回放。仅在任务需要且有新证据或具体新方法时诊断；原始 URI 为基线，一次只改一个变量，未解码验证不得声称该路径可用。
 
 ## 安全与资源

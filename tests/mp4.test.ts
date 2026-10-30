@@ -45,11 +45,13 @@ function flagsFixture({
   defaultFlags,
   firstFlags,
   sampleFlags,
+  composition,
 }: {
   trexFlags?: number
   defaultFlags?: number
   firstFlags?: number
   sampleFlags?: readonly number[]
+  composition?: readonly number[]
 } = {}) {
   const initialized = Buffer.concat(
     mp4Boxes(init).map((item) => {
@@ -71,10 +73,12 @@ function flagsFixture({
       )
     })
   )
-  const count = sampleFlags?.length ?? 2
-  const samples = Array.from({ length: count }, (_, index) =>
-    sampleFlags ? [1, sampleFlags[index]] : [1]
-  ).flat()
+  const count = sampleFlags?.length ?? composition?.length ?? 2
+  const samples = Array.from({ length: count }, (_, index) => [
+    1,
+    ...(sampleFlags ? [sampleFlags[index]] : []),
+    ...(composition ? [composition[index]] : []),
+  ]).flat()
   return Buffer.concat([
     initialized,
     box(
@@ -98,7 +102,8 @@ function flagsFixture({
               "trun",
               0x200 |
                 (firstFlags === undefined ? 0 : 4) |
-                (sampleFlags ? 0x400 : 0),
+                (sampleFlags ? 0x400 : 0) |
+                (composition ? 0x800 : 0),
               words(
                 count,
                 ...(firstFlags === undefined ? [] : [firstFlags]),
@@ -161,6 +166,14 @@ function copiedFragments(name: string) {
 }
 
 describe("fragmented MP4 timing and random-access metadata", () => {
+  it("distinguishes the first packet's PTS from a later minimum presentation PTS", () => {
+    const media = splitFragmentedMp4(
+      flagsFixture({ firstFlags: sync, composition: [2 * timescale, 0] })
+    )
+    expect(media.firstPresentationSeconds).toBe(2)
+    expect(media.startSeconds).toBe(1)
+    expect(media.decodeStartSeconds).toBe(0)
+  })
   for (const [name, codec] of [
     ["synthetic-preview.mp4", "h264"],
     ["synthetic-preview-hevc.mp4", "hevc"],

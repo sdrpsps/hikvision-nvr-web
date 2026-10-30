@@ -16,10 +16,16 @@ export class IsapiClient {
   ): Promise<string> {
     const channelPath =
       /^\/ISAPI\/ContentMgmt\/InputProxy\/channels\/[1-9]\d{0,8}$/.test(path)
+    const playbackCapabilityPath = [
+      "/SDK/capabilities",
+      "/ISAPI/System/capabilities",
+    ].includes(path)
     if (
+      (playbackCapabilityPath && (body !== undefined || operation)) ||
       (operation && (!channelPath || body === undefined)) ||
       (channelPath && body !== undefined && operation !== "PUT") ||
       (!channelPath &&
+        !playbackCapabilityPath &&
         ![
           "/ISAPI/System/deviceInfo",
           "/ISAPI/ContentMgmt/record/tracks",

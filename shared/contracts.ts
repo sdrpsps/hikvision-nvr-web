@@ -60,11 +60,17 @@ export type Channel = z.infer<typeof channelSchema>
 export type Recordings = z.infer<typeof recordingsSchema>
 export type Interval = z.infer<typeof intervalSchema>
 
-export const previewRequestSchema = recordingsQuerySchema.extend({
+export const historyTransferRequestSchema = recordingsQuerySchema.extend({
   segmentId: z.string().regex(/^[a-f0-9]{32}$/),
+})
+export const previewRequestSchema = historyTransferRequestSchema.extend({
+  at: z.iso.datetime().optional(),
 })
 export const previewSchema = z.object({
   fileRange: intervalSchema.optional(),
+  mediaStartAt: z.iso.datetime().optional(),
+  fileDurationSeconds: z.number().finite().positive().optional(),
+  source: z.literal("shttp").optional(),
   startOffsetSeconds: z.number().finite().nonnegative().optional(),
   id: z.uuid(),
   playlistUrl: z.string().regex(/^\/api\/streams\/[a-f0-9-]{36}\/index\.m3u8$/),
@@ -87,7 +93,6 @@ export type PlaybackStatus = z.infer<typeof playbackStatusSchema>
 export const liveRequestSchema = z.strictObject({ track: trackIdSchema })
 // Transfer requests identify only trusted server-side sources. A selection's
 // relative timestamps are interpreted locally by the browser media exporter.
-export const historyTransferRequestSchema = previewRequestSchema
 export const liveTransferRequestSchema = liveRequestSchema
 export const transferEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
@@ -95,6 +100,9 @@ export const transferEventSchema = z.discriminatedUnion("type", [
 ])
 export const liveSchema = previewSchema.omit({
   fileRange: true,
+  mediaStartAt: true,
+  fileDurationSeconds: true,
+  source: true,
   startOffsetSeconds: true,
   durationSeconds: true,
   estimatedDurationSeconds: true,

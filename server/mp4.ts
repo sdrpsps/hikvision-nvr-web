@@ -98,6 +98,7 @@ export function splitFragmentedMp4(buffer: Buffer) {
     samples = 0,
     decodeMin = Infinity,
     decodeMax = 0,
+    firstPresentation = Infinity,
     firstSampleFlags: number | undefined
   for (const moof of top.filter((box) => box.type === "moof")) {
     for (const traf of boxes(moof.data).filter((box) => box.type === "traf")) {
@@ -167,6 +168,8 @@ export function splitFragmentedMp4(buffer: Buffer) {
             invalid()
           decodeMin = Math.min(decodeMin, timestamp)
           decodeMax = Math.max(decodeMax, timestamp + duration)
+          if (firstPresentation === Infinity)
+            firstPresentation = timestamp + composition
           min = Math.min(min, timestamp + composition)
           max = Math.max(max, timestamp + composition + duration)
           timestamp += duration
@@ -192,6 +195,7 @@ export function splitFragmentedMp4(buffer: Buffer) {
     media: buffer.subarray(first.start),
     durationSeconds,
     startSeconds: min / timescale,
+    firstPresentationSeconds: firstPresentation / timescale,
     decodeStartSeconds: decodeMin / timescale,
     decodeDurationSeconds,
     sampleCount: samples,

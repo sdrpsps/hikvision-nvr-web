@@ -13,6 +13,8 @@ import { join } from "node:path"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { recordingFragments, type RecordingFragments } from "./playback-remux"
+import type { PlaybackInputMetadata } from "./playback-input"
+import { confirmPlaybackFrame } from "./playback-frame-proof"
 import type { RawSegment } from "./xml"
 import type { copiedAudio } from "./live-audio"
 
@@ -31,6 +33,9 @@ type Session = {
   bytes: number
   codec?: "h264" | "hevc"
   fileRange?: RawSegment["fileRange"]
+  source?: "shttp"
+  mediaStartAt?: string
+  fileDurationSeconds?: number
   startOffsetSeconds?: number
   estimatedDurationSeconds?: number
   complete: boolean
@@ -90,8 +95,9 @@ export class PlaybackSessions {
   }
   async create(
     config: NvrConfig,
-    resolve: () => Promise<RawSegment>,
-    signal: AbortSignal
+    resolve: (signal?: AbortSignal) => Promise<RawSegment>,
+    signal: AbortSignal,
+    requestedAt?: string
   ) {
     if (this.sessions.size >= MAX_PLAYBACK_SESSIONS)
       throw new AppError(
@@ -142,10 +148,27 @@ export class PlaybackSessions {
     if (signal.aborted) controller.abort()
     session.task = (async () => {
       await this.initialize()
-      const segment = await resolve()
+      const segment = await resolve(controller.signal)
+      if (
+        requestedAt !== undefined &&
+        (!Number.isFinite(Date.parse(requestedAt)) ||
+          Date.parse(requestedAt) < Date.parse(segment.startAt) ||
+          Date.parse(requestedAt) >= Date.parse(segment.endAt))
+      )
+        throw new AppError(
+          "INVALID_PLAYBACK_TIME",
+          400,
+          "所选时间不在这段录像内。"
+        )
       // Only the service can establish whether search boundaries clipped a file.
       session.fileRange = segment.fileRange
       session.startOffsetSeconds = segment.startOffsetSeconds
+      if (requestedAt !== undefined && segment.fileRange)
+        session.startOffsetSeconds = Math.max(
+          0,
+          (Date.parse(requestedAt) - Date.parse(segment.fileRange.startAt)) /
+            1000
+        )
       const estimatedDurationSeconds = segment.estimatedDurationSeconds
       if (
         estimatedDurationSeconds !== undefined &&
@@ -181,6 +204,7 @@ export class PlaybackSessions {
           )
         await writeFile(join(session.directory, asset), data, { mode: 0o600 })
       }
+      let inputMetadata: PlaybackInputMetadata | undefined
       for await (const media of this.fragments(
         segment.playbackURI,
         config,
@@ -203,6 +227,15 @@ export class PlaybackSessions {
           await save(`audio-${sequence}.bin`, data)
           session.audio.push({ ...metadata, bytes: data.length, sequence })
           session.audioStatus = "available"
+        },
+        {
+          recording: segment,
+          requestedAt,
+          onReady(metadata) {
+            if (controller.signal.aborted)
+              throw new AppError("MEDIA_CANCELLED", 503, "回放已取消。")
+            inputMetadata = metadata
+          },
         }
       )) {
         if (controller.signal.aborted)
@@ -214,9 +247,42 @@ export class PlaybackSessions {
             "录像超过本次播放容量限制。"
           )
         if (!session.segments.length) {
+          if (inputMetadata) {
+            // Only map HK to the muxed clock after proving stream-copy kept
+            // the same first video frame; a later IDR must not inherit its time.
+            confirmPlaybackFrame(media, inputMetadata.firstVideoHash)
+            // HLS starts on the decode timeline. HK identifies the first
+            // presented packet, which can follow it when B frames reorder.
+            const lead =
+              media.firstPresentationSeconds - media.decodeStartSeconds
+            if (
+              !media.startsWithKeyframe ||
+              !Number.isFinite(lead) ||
+              Math.abs(lead) > 10 ||
+              inputMetadata.estimatedDurationSeconds + lead <= 0
+            )
+              throw new AppError(
+                "MEDIA_CLOCK_UNCONFIRMED",
+                502,
+                "录像封装的起始时间无法确认，已停止回放。"
+              )
+            session.source = inputMetadata.source
+            session.mediaStartAt = new Date(
+              Date.parse(inputMetadata.mediaStartAt) - lead * 1000
+            ).toISOString()
+            session.fileDurationSeconds = inputMetadata.fileDurationSeconds
+            session.startOffsetSeconds = Math.max(
+              0,
+              inputMetadata.startOffsetSeconds + lead
+            )
+            session.estimatedDurationSeconds =
+              inputMetadata.estimatedDurationSeconds + lead
+          }
           await save("init.mp4", media.init)
           session.codec = media.codec
-          session.videoStartSeconds = media.startSeconds
+          session.videoStartSeconds = inputMetadata
+            ? media.decodeStartSeconds
+            : media.startSeconds
         } else if (session.codec !== media.codec)
           throw new AppError(
             "MEDIA_UNSUPPORTED_CODEC",
@@ -268,6 +334,11 @@ export class PlaybackSessions {
       return {
         id,
         ...(session.fileRange && { fileRange: session.fileRange }),
+        ...(session.source && {
+          source: session.source,
+          mediaStartAt: session.mediaStartAt,
+          fileDurationSeconds: session.fileDurationSeconds,
+        }),
         ...(session.startOffsetSeconds !== undefined && {
           startOffsetSeconds: session.startOffsetSeconds,
         }),

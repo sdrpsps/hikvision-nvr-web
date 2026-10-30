@@ -442,7 +442,14 @@ for (const codec of ["h264", "hevc"] as const) {
         )
       )
       .toBe(closedBeforeStop + 1)
-    expect(bodies).toEqual([{ track: "101", date: "2026-10-17", segmentId }])
+    expect(bodies).toEqual([
+      {
+        track: "101",
+        date: "2026-10-17",
+        segmentId,
+        at: "2026-10-16T16:00:00Z",
+      },
+    ])
     await page.getByRole("button", { name: "播放" }).click()
     await expect(page.locator("video")).toHaveCount(1)
     await selectDate(page, "2026-10-16")

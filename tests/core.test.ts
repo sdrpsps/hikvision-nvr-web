@@ -405,6 +405,76 @@ describe("diagnostic safety", () => {
 })
 
 describe("query limits and cleanup", () => {
+  it("releases cancelled query slots while a shared channel lookup is still pending", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const client = {
+      request: vi.fn(async (path: string) => {
+        if (path.endsWith("tracks")) await gate
+        return path.endsWith("tracks") ? fixture("tracks") : fixture("empty")
+      }),
+    }
+    const service = new NvrService(config, client as unknown as IsapiClient)
+    const first = new AbortController(),
+      second = new AbortController()
+    const one = service.queryRaw("101", "2026-10-17", first.signal)
+    const two = service.queryRaw("201", "2026-10-17", second.signal)
+    const rejectedOne = expect(one).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    const rejectedTwo = expect(two).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    first.abort()
+    second.abort()
+    await Promise.all([rejectedOne, rejectedTwo])
+    const latest = service.queryRaw("101", "2026-10-17")
+    release()
+    await expect(latest).resolves.toEqual([])
+    expect(
+      client.request.mock.calls.filter(([path]) => path.endsWith("tracks"))
+    ).toHaveLength(1)
+  })
+
+  it("passes cancellation to search requests and frees both slots for the latest target", async () => {
+    const requests: AbortSignal[] = []
+    let block = true
+    const client = {
+      request: vi.fn(
+        async (path: string, _body?: string, signal?: AbortSignal) => {
+          if (path.endsWith("tracks")) return fixture("tracks")
+          if (!path.endsWith("search") || !block) return fixture("empty")
+          requests.push(signal!)
+          return new Promise<string>((_resolve, reject) => {
+            const abort = () => reject(signal!.reason)
+            signal!.addEventListener("abort", abort, { once: true })
+            if (signal!.aborted) abort()
+          })
+        }
+      ),
+    }
+    const service = new NvrService(config, client as unknown as IsapiClient)
+    const first = new AbortController(),
+      second = new AbortController()
+    const one = service.queryRaw("101", "2026-10-17", first.signal)
+    const two = service.queryRaw("201", "2026-10-17", second.signal)
+    const rejectedOne = expect(one).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    const rejectedTwo = expect(two).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    first.abort()
+    second.abort()
+    await Promise.all([rejectedOne, rejectedTwo])
+    expect(requests.every((signal) => signal.aborted)).toBe(true)
+    block = false
+    await expect(service.queryRaw("101", "2026-10-17")).resolves.toEqual([])
+  })
+
   it("coalesces identical simultaneous searches", async () => {
     const { service, client } = mockedService()
     const [first, second] = await Promise.all([

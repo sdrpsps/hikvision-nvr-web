@@ -11,6 +11,7 @@ import {
   type RecordingFragments,
 } from "../server/playback-remux"
 import { mp4Boxes, splitFragmentedMp4 } from "../server/mp4"
+import { firstPlaybackFrameHash } from "../server/playback-frame-proof"
 import { readNvrConfig } from "../server/config"
 import { createApp } from "../server/app"
 import { NvrService } from "../server/recordings"
@@ -134,6 +135,244 @@ afterEach(async () => {
 })
 
 describe("full recording playback", () => {
+  it("hands a selected time to the source and maps HK PTS onto the HLS decode origin", async () => {
+    const hevc = splitFragmentedMp4(
+      readFileSync(
+        new URL("../fixtures/synthetic-preview-hevc.mp4", import.meta.url)
+      )
+    )
+    const resolved = {
+      ...source,
+      fileRange: { startAt: "2026-10-16T12:49:33.000Z", endAt: source.endAt },
+    }
+    let selectedAt: string | undefined, uri: string | undefined
+    const { sessions } = await setup(
+      async function* (value, _config, signal, _audio, context) {
+        uri = value
+        selectedAt = context?.requestedAt
+        expect(context?.recording).toBe(resolved)
+        context?.onReady({
+          source: "shttp",
+          mediaStartAt: "2026-10-16T16:59:38.000Z",
+          firstVideoHash: firstPlaybackFrameHash(hevc),
+          fileDurationSeconds: 15027,
+          startOffsetSeconds: 2,
+          estimatedDurationSeconds: 22,
+        })
+        yield hevc
+        await waitForAbort(signal)
+      }
+    )
+    const session = await sessions.create(
+      config,
+      async () => resolved,
+      signal(),
+      "2026-10-16T16:59:40.000Z"
+    )
+    const lead = hevc.firstPresentationSeconds - hevc.decodeStartSeconds
+    expect(lead).toBeGreaterThan(0)
+    expect(uri).toBe(source.playbackURI)
+    expect(selectedAt).toBe("2026-10-16T16:59:40.000Z")
+    expect(session.source).toBe("shttp")
+    expect(session.mediaStartAt).toBe(
+      new Date(
+        Date.parse("2026-10-16T16:59:38.000Z") - lead * 1000
+      ).toISOString()
+    )
+    expect(session.startOffsetSeconds).toBeCloseTo(2 + lead, 6)
+    expect(session.estimatedDurationSeconds).toBeCloseTo(22 + lead, 6)
+    expect(session.fileRange).toEqual(resolved.fileRange)
+    expect(session.fileDurationSeconds).toBe(15027)
+    expect(session.codec).toBe("hevc")
+    expect((await sessions.audio(session.id, -1, 0)).videoStartSeconds).toBe(
+      hevc.decodeStartSeconds
+    )
+    expect(JSON.stringify(session)).not.toMatch(
+      /playbackURI|rtsp:|nvr.test|synthetic|firstVideoHash/
+    )
+    expect(JSON.stringify(session)).not.toContain(firstPlaybackFrameHash(hevc))
+    await sessions.delete(session.id)
+  })
+
+  it("preserves the requested HTTP offset when no server-side source metadata is published", async () => {
+    const { sessions } = await setup(async function* () {
+      yield media
+    })
+    const session = await sessions.create(
+      config,
+      async () => ({
+        ...source,
+        fileRange: { startAt: source.startAt, endAt: source.endAt },
+      }),
+      signal(),
+      "2026-10-16T16:45:00.000Z"
+    )
+    expect(session.startOffsetSeconds).toBe(2700)
+    expect(session).not.toHaveProperty("source")
+    expect(session).not.toHaveProperty("mediaStartAt")
+    await sessions.delete(session.id)
+  })
+
+  it.each(["invalid", "2026-10-16T15:59:59Z", "2026-10-16T17:00:00Z"])(
+    "rejects an invalid selected time before opening media: %s",
+    async (at) => {
+      const opened = vi.fn()
+      const { sessions, root } = await setup(async function* () {
+        opened()
+        yield media
+      })
+      await expect(
+        sessions.create(config, resolve, signal(), at)
+      ).rejects.toMatchObject({ code: "INVALID_PLAYBACK_TIME" })
+      expect(opened).not.toHaveBeenCalled()
+      expect(await readdir(root)).toEqual([])
+    }
+  )
+
+  it("passes only the validated API target to the trusted recording source", async () => {
+    let at: string | undefined
+    const { sessions } = await setup(
+      async function* (_uri, _config, signal, _audio, context) {
+        at = context?.requestedAt
+        yield media
+        await waitForAbort(signal)
+      }
+    )
+    const service = new NvrService(config)
+    vi.spyOn(service, "resolveSegment").mockResolvedValue(source)
+    const app = createApp(() => service, sessions)
+    const response = await app.request("/api/streams/playback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        track: "101",
+        date: "2026-10-17",
+        segmentId: "a".repeat(32),
+        at: "2026-10-16T16:45:00.000Z",
+      }),
+    })
+    expect(response.status).toBe(201)
+    expect(at).toBe("2026-10-16T16:45:00.000Z")
+    expect(vi.mocked(service.resolveSegment).mock.calls[0][3]).toBeInstanceOf(
+      AbortSignal
+    )
+    const result = await response.json()
+    expect(JSON.stringify(result)).not.toMatch(
+      /playbackURI|rtsp:|nvr.test|synthetic/
+    )
+    await sessions.delete(result.id)
+    const bad = await app.request("/api/streams/playback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        track: "101",
+        date: "2026-10-17",
+        segmentId: "a".repeat(32),
+        at: "not-a-date",
+      }),
+    })
+    expect(bad.status).toBe(400)
+    expect(service.resolveSegment).toHaveBeenCalledTimes(1)
+  })
+
+  it("cancels the trusted recording lookup before it can start a superseded media source", async () => {
+    let lookupSignal: AbortSignal | undefined, entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const opened = vi.fn()
+    const { sessions, root } = await setup(async function* () {
+      opened()
+      yield media
+    })
+    const controller = new AbortController()
+    const pending = sessions.create(
+      config,
+      (signal) => {
+        lookupSignal = signal
+        entered()
+        return new Promise<RawSegment>((_resolve, reject) => {
+          signal!.addEventListener("abort", () => reject(signal!.reason), {
+            once: true,
+          })
+        })
+      },
+      controller.signal
+    )
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "MEDIA_CANCELLED",
+    })
+    await started
+    controller.abort()
+    await rejected
+    expect(lookupSignal?.aborted).toBe(true)
+    expect(opened).not.toHaveBeenCalled()
+    expect(await readdir(root)).toEqual([])
+    const latest = await sessions.create(config, resolve, signal())
+    expect(latest.codec).toBe("h264")
+    await sessions.delete(latest.id)
+  })
+
+  it.each([false, true])(
+    "rejects an unconfirmed server-seek output clock (invalid keyframe %s)",
+    async (badKeyframe) => {
+      const { sessions, root } = await setup(
+        async function* (_uri, _config, _signal, _audio, context) {
+          context?.onReady({
+            source: "shttp",
+            mediaStartAt: source.startAt,
+            firstVideoHash: firstPlaybackFrameHash(media),
+            fileDurationSeconds: 3600,
+            startOffsetSeconds: 0,
+            estimatedDurationSeconds: 3600,
+          })
+          yield {
+            ...media,
+            ...(badKeyframe
+              ? { startsWithKeyframe: false }
+              : { firstPresentationSeconds: 100 }),
+          }
+        }
+      )
+      await expect(
+        sessions.create(config, resolve, signal())
+      ).rejects.toMatchObject({ code: "MEDIA_CLOCK_UNCONFIRMED" })
+      expect(await readdir(root)).toEqual([])
+    }
+  )
+
+  it.each(["0".repeat(64), "invalid-proof"])(
+    "rejects mismatched first-frame proof and cleans the session: %s",
+    async (firstVideoHash) => {
+      let closed = false
+      const { sessions, root } = await setup(
+        async function* (_uri, _config, _signal, _audio, context) {
+          try {
+            context?.onReady({
+              source: "shttp",
+              mediaStartAt: source.startAt,
+              firstVideoHash,
+              fileDurationSeconds: 3600,
+              startOffsetSeconds: 0,
+              estimatedDurationSeconds: 3600,
+            })
+            yield media
+          } finally {
+            closed = true
+          }
+        }
+      )
+      await expect(
+        sessions.create(config, resolve, signal())
+      ).rejects.toMatchObject({
+        code: "MEDIA_CLOCK_MISMATCH",
+        message: "录像封装的首帧与设备时间不符，已停止回放。",
+      })
+      expect(closed).toBe(true)
+      expect(await readdir(root)).toEqual([])
+    }
+  )
+
   it("returns only the resolved full-file time range and selected start offset in the session", async () => {
     const { sessions } = await setup(async function* () {
       yield media
