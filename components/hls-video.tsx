@@ -207,7 +207,11 @@ export function HlsVideo({
         toggleSound={toggleSound}
         position={position + fileOffset}
         totalDuration={fileDuration}
-        clipSource={clipSource}
+        clipSource={
+          clipSource
+            ? { ...clipSource, fileStartAt: recording?.fileRange?.startAt }
+            : undefined
+        }
         actions={actions}
         onPreferencesChange={onPreferencesChange}
         reportError={reportError}

@@ -9,6 +9,7 @@ import {
   taskDetailMessage,
 } from "@/lib/browser-save/task-display"
 import { mediaClock, type SaveTask } from "@/lib/browser-save/types"
+import { recordingRange } from "@/lib/browser-save/recording-time"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { SquareIcon } from "lucide-react"
@@ -81,14 +82,26 @@ export function SaveTaskItem({ task }: { task: SaveTask }) {
       )}
       {task.source.mode === "history" && (
         <p className="text-xs text-muted-foreground">
-          文件内选区 {mediaClock(task.source.startSeconds)} —{" "}
-          {mediaClock(task.source.endSeconds)}，原速
+          {task.source.fileStartAt ? "录像选区 " : "文件内选区 "}
+          {recordingRange(
+            task.source,
+            task.source.startSeconds,
+            task.source.endSeconds
+          ) ??
+            `${mediaClock(task.source.startSeconds)} — ${mediaClock(task.source.endSeconds)}`}
+          ，原速
         </p>
       )}
       {rangeChanged && task.actualStartSeconds !== undefined && (
         <p className="text-xs text-muted-foreground">
-          实际覆盖 {mediaClock(task.actualStartSeconds)} —{" "}
-          {mediaClock(task.actualEndSeconds ?? task.actualStartSeconds)}
+          实际覆盖{" "}
+          {task.source.mode === "history" && task.source.fileStartAt
+            ? recordingRange(
+                task.source,
+                task.actualStartSeconds,
+                task.actualEndSeconds ?? task.actualStartSeconds
+              )
+            : `${mediaClock(task.actualStartSeconds)} — ${mediaClock(task.actualEndSeconds ?? task.actualStartSeconds)}`}
         </p>
       )}
       {message && (

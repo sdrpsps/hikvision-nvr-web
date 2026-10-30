@@ -13,6 +13,7 @@ export type SaveSource =
       channelName: string
       date: string
       segmentId: string
+      fileStartAt?: string
       startSeconds: number
       endSeconds: number
     }

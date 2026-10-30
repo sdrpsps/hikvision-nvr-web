@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { CircleDotIcon } from "lucide-react"
+import { CircleDotIcon, LoaderCircleIcon, SquareIcon } from "lucide-react"
 import { saveCapability } from "@/lib/browser-save/destination"
 import { SaveCapabilityNotice } from "./capability-notice"
 import {
@@ -18,7 +18,6 @@ import { useBrowserSaves } from "./context"
 import { active, taskStateLabel } from "@/lib/browser-save/task-display"
 import { mediaClock } from "@/lib/browser-save/types"
 import { Button } from "@/components/ui/button"
-import { CircleIcon, LoaderCircleIcon, SquareIcon } from "lucide-react"
 
 export function LiveRecordButton({
   track,
@@ -136,7 +135,7 @@ export function LiveRecordButton({
               })
             }}
           >
-            <CircleIcon data-icon="inline-start" />
+            <CircleDotIcon data-icon="inline-start" />
             {nativeDownload ? "开始录制" : "选择位置并录制"}
           </Button>
         </div>

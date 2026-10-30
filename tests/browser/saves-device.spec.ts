@@ -11,6 +11,7 @@ import {
   type Page,
   type Request,
 } from "@playwright/test"
+import { Temporal } from "@js-temporal/polyfill"
 import { selectDate, selectOption } from "./controls"
 
 type SourceSample = {
@@ -730,12 +731,22 @@ test.describe("real NVR browser recording and streaming exports", () => {
     await page.getByRole("button", { name: "播放倍速", exact: true }).click()
     await page.getByRole("button", { name: "4×", exact: true }).click()
     await page.getByRole("button", { name: "下载片段", exact: true }).click()
-    await page
-      .getByRole("textbox", { name: "片段起点", exact: true })
-      .fill("00:00:01")
+    const start = page.getByRole("textbox", { name: "片段起点", exact: true })
+    const fileStart = Temporal.PlainDateTime.from(await start.inputValue())
+    await start.fill(
+      fileStart
+        .add({ seconds: 1 })
+        .toString({ smallestUnit: "second" })
+        .replace("T", " ")
+    )
     await page
       .getByRole("textbox", { name: "片段终点", exact: true })
-      .fill("00:00:08")
+      .fill(
+        fileStart
+          .add({ seconds: 8 })
+          .toString({ smallestUnit: "second" })
+          .replace("T", " ")
+      )
   }
 
   async function taskPanel(page: Page) {

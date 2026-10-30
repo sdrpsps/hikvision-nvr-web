@@ -224,12 +224,14 @@ async function syntheticSource(
   return { requests, open }
 }
 
-async function queries(page: Page, fullDuration = 3) {
+async function queries(
+  page: Page,
+  fullDuration = 3,
+  fileStart = "2026-10-16T16:00:00Z"
+) {
   const fileRange = {
-    startAt: "2026-10-16T16:00:00Z",
-    endAt: new Date(
-      Date.parse("2026-10-16T16:00:00Z") + fullDuration * 1000
-    ).toISOString(),
+    startAt: fileStart,
+    endAt: new Date(Date.parse(fileStart) + fullDuration * 1000).toISOString(),
   }
   await page.route("**/api/channels", (route) =>
     route.fulfill({
@@ -258,6 +260,12 @@ async function queries(page: Page, fullDuration = 3) {
           {
             id: segmentId,
             ...fileRange,
+            startAt: new Date(
+              Math.max(
+                Date.parse(fileStart),
+                Date.parse("2026-10-16T16:00:00Z")
+              )
+            ).toISOString(),
           },
         ],
         coverage: [],
@@ -872,10 +880,10 @@ test("history A/B validation and short original-speed export ignore playback spe
   await page.getByRole("button", { name: "下载片段", exact: true }).click()
   await page
     .getByRole("textbox", { name: "片段起点", exact: true })
-    .fill("00:00:02")
+    .fill("2026-10-17 00:00:02")
   await page
     .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("00:00:01")
+    .fill("2026-10-17 00:00:01")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await expect(
     page.getByRole("alert").filter({ hasText: "终点必须晚于起点" })
@@ -883,10 +891,10 @@ test("history A/B validation and short original-speed export ignore playback spe
   expect(source.requests).toHaveLength(0)
   await page
     .getByRole("textbox", { name: "片段起点", exact: true })
-    .fill("00:00:01")
+    .fill("2026-10-17 00:00:01")
   await page
     .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("00:00:02")
+    .fill("2026-10-17 00:00:02")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await page
     .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -897,7 +905,7 @@ test("history A/B validation and short original-speed export ignore playback spe
     { timeout: 15000 }
   )
   await expect(page.locator(".save-task-item")).toContainText(
-    "00:00:01 — 00:00:02，原速"
+    "2026-10-17 00:00:01 — 2026-10-17 00:00:02，原速"
   )
   expect(source.requests.map((request) => request.body)).toEqual([
     { track: "101", date: "2026-10-17", segmentId },
@@ -964,16 +972,16 @@ test("fractional file end can be marked, extended and submitted without truncati
   await page
     .getByRole("button", { name: "将当前位置设为终点", exact: true })
     .click()
-  await expect(end).toHaveValue("00:00:03")
-  await end.fill("00:00:01")
+  await expect(end).toHaveValue("2026-10-17 00:00:03")
+  await end.fill("2026-10-17 00:00:01")
   await page.getByRole("button", { name: "后扩 30 秒", exact: true }).click()
-  await expect(end).toHaveValue("00:00:03")
-  await end.fill("00:00:04")
+  await expect(end).toHaveValue("2026-10-17 00:00:03")
+  await end.fill("2026-10-17 00:00:04")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await expect(
-    page.getByRole("alert").filter({ hasText: "终点超出完整文件时长" })
+    page.getByRole("alert").filter({ hasText: "超出当前录像文件范围" })
   ).toBeVisible()
-  await end.fill("00:00:03")
+  await end.fill("2026-10-17 00:00:03")
   await page.getByRole("button", { name: "保存选区", exact: true }).click()
   await page
     .getByRole("button", { name: "录制与下载任务", exact: true })
@@ -1100,10 +1108,10 @@ test("download activity remains visible while its dialog is closed and navigatio
     await trigger.click()
     await setup
       .getByRole("textbox", { name: "片段起点", exact: true })
-      .fill("00:00:00")
+      .fill("2026-10-17 00:00:00")
     await setup
       .getByRole("textbox", { name: "片段终点", exact: true })
-      .fill("00:00:03")
+      .fill("2026-10-17 00:00:03")
     await setup.getByRole("button", { name: "保存选区", exact: true }).click()
     await expect(setup).toBeHidden()
     const activity = page.getByRole("region", {
@@ -1440,7 +1448,7 @@ test("four concurrent saves reject a fifth task and stop independently before cl
   })
   await clip
     .getByRole("textbox", { name: "片段终点", exact: true })
-    .fill("00:00:03")
+    .fill("2026-10-17 00:00:03")
   await clip.getByRole("button", { name: "保存选区", exact: true }).click()
   await expect(
     page.locator('[data-sonner-toast][data-type="warning"]')
@@ -1485,4 +1493,119 @@ test("four concurrent saves reject a fifth task and stop independently before cl
     ])
     expect(Number(file.info.format.duration)).toBeCloseTo(3, 1)
   }
+})
+
+test.describe("recording clock download selection", () => {
+  test.use({ timezoneId: "America/Los_Angeles" })
+
+  test("uses the complete file clock across midnight and rejects invalid ranges before saving", async ({
+    page,
+    context,
+  }) => {
+    const source = await syntheticSource(context)
+    await queries(page, 3, "2026-10-16T15:59:59Z")
+    await opfsPicker(page)
+    await page.addInitScript(() => {
+      const starts: { start: number; end: number }[] = []
+      Object.defineProperty(window, "clockClipStarts", { value: starts })
+      const post = Worker.prototype.postMessage
+      Worker.prototype.postMessage = function (
+        message: unknown,
+        transfer?: Transferable[] | StructuredSerializeOptions
+      ) {
+        const request = message as {
+          type?: string
+          source?: { mode: string; startSeconds: number; endSeconds: number }
+        }
+        if (request.type === "start" && request.source?.mode === "history")
+          starts.push({
+            start: request.source.startSeconds,
+            end: request.source.endSeconds,
+          })
+        post.call(
+          this,
+          message,
+          Array.isArray(transfer) ? { transfer } : transfer
+        )
+      }
+    })
+    await page.goto("/playback")
+    await page.getByRole("button", { name: "播放", exact: true }).click()
+    const video = page.locator("video")
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.readyState)
+      )
+      .toBeGreaterThanOrEqual(2)
+    await video.evaluate((element: HTMLVideoElement) => {
+      element.pause()
+      element.currentTime = 1
+    })
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    await page.getByRole("button", { name: "下载片段", exact: true }).click()
+    const dialog = page.getByRole("dialog", {
+      name: "下载录像片段",
+      exact: true,
+    })
+    const start = dialog.getByLabel("片段起点")
+    const end = dialog.getByLabel("片段终点")
+    const submit = dialog.getByRole("button", { name: "保存选区", exact: true })
+    await expect(start).toHaveValue("2026-10-16 23:59:59")
+    await expect(dialog).toContainText("Asia/Shanghai")
+    await expect(dialog).toContainText(
+      "2026-10-16 23:59:59 — 2026-10-17 00:00:02"
+    )
+    for (const value of [
+      "",
+      "00:00:00",
+      "2026-02-30 00:00:00",
+      "2026-10-16 23:59:58",
+      "2026-10-17 00:00:02",
+    ]) {
+      await start.fill(value)
+      await submit.click()
+      await expect(dialog.getByRole("alert")).toBeVisible()
+      expect(source.requests).toHaveLength(0)
+    }
+    await page
+      .getByRole("button", { name: "将当前位置设为起点", exact: true })
+      .click()
+    await expect(start).toHaveValue("2026-10-17 00:00:00")
+    await end.fill("2026-10-17 00:00:03")
+    await submit.click()
+    await expect(dialog.getByRole("alert")).toContainText(
+      "超出当前录像文件范围"
+    )
+    expect(source.requests).toHaveLength(0)
+    await end.fill("2026-10-17 00:00:01")
+    await submit.click()
+    await page
+      .getByRole("button", { name: "录制与下载任务", exact: true })
+      .click()
+    const task = page.locator(".save-task-item")
+    await expect(task).toHaveAttribute("data-state", "complete", {
+      timeout: 15000,
+    })
+    await expect(task).toContainText(
+      "录像选区 2026-10-17 00:00:00 — 2026-10-17 00:00:01，原速"
+    )
+    await expect(task.locator("p[title]")).toHaveAttribute(
+      "title",
+      /录像片段_2026-10-17_00-00-00_至_2026-10-17_00-00-01/
+    )
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              clockClipStarts: { start: number; end: number }[]
+            }
+          ).clockClipStarts
+      )
+    ).toEqual([{ start: 1, end: 2 }])
+  })
 })

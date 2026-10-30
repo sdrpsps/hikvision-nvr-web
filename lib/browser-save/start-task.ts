@@ -7,6 +7,7 @@ import { active } from "./task-display"
 import { mediaClock, safeFilename, type SaveSource } from "./types"
 import { startTaskWorker } from "./task-worker"
 import type { SaveTaskRuntime } from "./task-runtime"
+import { recordingRange } from "./recording-time"
 
 export async function startSaveTask(
   source: SaveSource,
@@ -55,7 +56,7 @@ export async function startSaveTask(
     .replaceAll(":", "-")
   const range =
     source.mode === "history"
-      ? `_${source.date}_文件内${mediaClock(source.startSeconds).replaceAll(":", "-")}-${mediaClock(source.endSeconds).replaceAll(":", "-")}`
+      ? `_${(recordingRange(source, source.startSeconds, source.endSeconds) ?? `${source.date}_文件内${mediaClock(source.startSeconds)}-${mediaClock(source.endSeconds)}`).replaceAll(":", "-").replaceAll(" ", "_").replace("—", "至")}`
       : `_${stamp}`
   const filename = `${safeFilename(source.channelName)}_${source.mode === "live" ? "手动录制" : "录像片段"}${range}_${id.slice(0, 6)}.mkv`
   update((old) => [

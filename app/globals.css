@@ -705,9 +705,7 @@ body {
   pointer-events: none;
   transition: opacity 120ms ease-out;
 }
-.live-stage
-  .live-window:is(.is-selected, :hover, :focus-within)
-  .live-video-controls,
+.live-stage .live-window:is(:hover, :has(:focus-visible)) .live-video-controls,
 .live-stage .video-surface:fullscreen .live-video-controls {
   opacity: 1;
   pointer-events: auto;
