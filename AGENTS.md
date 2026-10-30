@@ -38,6 +38,11 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Skill 不可用或环境不满足时说明限制并采用可靠的常规方式，不因此阻断任务；不擅自创建或更新 Skill。
 - Skill 不覆盖用户明确需求、设备操作边界、隐私保护和测试真实性要求。
 
+## 官方插件分析与临时清单
+
+- 需要分析海康官方 DLL、SHTTP 或插件行为时，先阅读 [官方 DLL 解包与静态分析指引](docs/HIKVISION-DLL-ANALYSIS.md)，核验样本哈希和模块身份后使用其中地址。默认只做本地静态分析，不执行原厂二进制，不把导出名或模拟结果当成当前设备支持；设备实验仍须有明确授权范围。
+- 用户要求的短期优化清单位于 `docs/OPTIMIZATION-TODO.md`（若存在）。它不是长期路线图或自动执行授权；接手时检查有效期，条目完成验收或明确放弃后即删除，全部处理完或到文件规定的清理期限时删除整份清单，不换名归档、不复制成新待办、不自动延期。没有运行中的 agent 时不会自动定时删除；稳定知识只按需保留在长期指引或 README。
+
 ## 技术与产品边界
 
 - 沿用 Next.js App Router、React、TypeScript、pnpm 和 Zod；Hono 挂载于 `app/api/[[...route]]/route.ts`，仅一个 Next.js 实例、Node.js Runtime，Route Handler 只适配请求，设备业务位于 `server/`。

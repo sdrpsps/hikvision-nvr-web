@@ -16,6 +16,7 @@ import { mp4Boxes, mp4U32, splitFragmentedMp4 } from "../server/mp4"
 import { createApp } from "../server/app"
 import { NvrService } from "../server/recordings"
 import { PreviewSessions } from "../server/preview"
+import { liveSchema } from "../shared/contracts"
 
 const config = readNvrConfig({
   NVR_HOST: "nvr.test",
@@ -55,7 +56,8 @@ function fullBox(type: string, flags: number, data: Buffer) {
 function timedFragment(
   durationSeconds: number,
   independent = false,
-  startSeconds = 0
+  startSeconds = 0,
+  sourceTimescale = timescale
 ) {
   return Buffer.concat([
     box(
@@ -70,12 +72,16 @@ function timedFragment(
               0x020038,
               words(
                 trackId,
-                Math.round(durationSeconds * timescale),
+                Math.round(durationSeconds * sourceTimescale),
                 1,
                 independent ? 0x02000000 : 0x01010000
               )
             ),
-            fullBox("tfdt", 0, words(Math.round(startSeconds * timescale))),
+            fullBox(
+              "tfdt",
+              0,
+              words(Math.round(startSeconds * sourceTimescale))
+            ),
             fullBox("trun", 0, words(1)),
           ])
         ),
@@ -152,6 +158,13 @@ function playlistEntries(playlist: string) {
       asset: m[2],
     })
   )
+}
+function playlistStartOffset(playlist: string) {
+  const match = /#EXT-X-START:TIME-OFFSET=(-?[\d.]+),PRECISE=NO\n/.exec(
+    playlist
+  )
+  if (!match) throw new Error("Live playlist is missing its safe start offset")
+  return Number(match[1])
 }
 
 function setup(ttl?: number, automatic = true) {
@@ -234,6 +247,140 @@ describe("live copy-only lifecycle", () => {
       sessions.dispose()
     }
   })
+  it("observes output bytes, dependent media, independent media and readiness separately", async () => {
+    vi.useFakeTimers()
+    const { sessions, children } = setup(undefined, false)
+    try {
+      let ready = false
+      const pending = sessions
+        .create(
+          config,
+          () =>
+            new Promise<string>((done) => setTimeout(() => done("101"), 10)),
+          signal()
+        )
+        .then((value) => {
+          ready = true
+          return value
+        })
+      await Promise.resolve()
+      expect(children).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(20)
+      const output = children[0].output
+      output.write(media.init.subarray(0, 4))
+      await vi.advanceTimersByTimeAsync(10)
+      output.write(media.init.subarray(4))
+      const dependent = timedFragment(0.5, false, 5)
+      await vi.advanceTimersByTimeAsync(5)
+      output.write(dependent.subarray(0, -1))
+      await vi.advanceTimersByTimeAsync(5)
+      output.write(dependent.subarray(-1))
+      await vi.advanceTimersByTimeAsync(10)
+      output.write(timedFragment(0.5, false, 5.5))
+      await vi.advanceTimersByTimeAsync(30)
+      output.write(timedFragment(0.5, true, 10))
+      for (let index = 1; index < 5; index++) {
+        await vi.advanceTimersByTimeAsync(100)
+        output.write(timedFragment(0.5, false, 10 + index * 0.5))
+      }
+      await Promise.resolve()
+      expect(ready).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
+      output.write(timedFragment(0.5, false, 12.5))
+      const session = await pending
+      const expected = {
+        firstByteMs: 20,
+        firstFragmentMs: 40,
+        firstIndependentFragmentMs: 80,
+        readyMs: 580,
+      }
+      expect(session.startup).toEqual(expected)
+      expect(session.targetDurationSeconds).toBe(1)
+      expect(liveSchema.parse(session).startup).toEqual(expected)
+      expect(sessions.audio(session.id, -1).videoStartSeconds).toBe(10)
+      await vi.advanceTimersByTimeAsync(100)
+      output.write(timedFragment(0.5, true, 13))
+      expect(session.startup).toEqual(expected)
+      sessions.dispose()
+      expect(children[0].kill).toHaveBeenCalledExactlyOnceWith("SIGKILL")
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      sessions.dispose()
+      vi.useRealTimers()
+    }
+  })
+  it("accepts zero elapsed stages and keeps startup optional for older responses", async () => {
+    vi.useFakeTimers()
+    const { sessions, children } = setup(undefined, false)
+    try {
+      const pending = sessions.create(config, resolve, signal())
+      await Promise.resolve()
+      children[0].output.write(Buffer.concat([media.init, media.media]))
+      vi.advanceTimersByTime(10)
+      children[0].output.write(timedFragment(0.5, true, 3))
+      const session = await pending
+      const { startup, targetDurationSeconds, ...legacy } = session
+      expect(targetDurationSeconds).toBe(1)
+      expect(startup).toEqual({
+        firstByteMs: 0,
+        firstFragmentMs: 0,
+        firstIndependentFragmentMs: 0,
+        readyMs: 0,
+      })
+      expect(liveSchema.safeParse(session).success).toBe(true)
+      expect(liveSchema.safeParse(legacy).success).toBe(true)
+      for (const value of [-1, 0, NaN, Infinity, -Infinity])
+        expect(
+          liveSchema.safeParse({ ...session, targetDurationSeconds: value })
+            .success
+        ).toBe(false)
+      for (const field of Object.keys(startup))
+        for (const value of [-1, NaN, Infinity, -Infinity])
+          expect(
+            liveSchema.safeParse({
+              ...session,
+              startup: { ...startup, [field]: value },
+            }).success
+          ).toBe(false)
+    } finally {
+      sessions.dispose()
+      vi.useRealTimers()
+    }
+  })
+  it.each([
+    ["cancel", "MEDIA_CANCELLED"],
+    ["close", "LIVE_INTERRUPTED"],
+    ["invalid", "LIVE_INVALID_MEDIA"],
+    ["timeout", "LIVE_TIMEOUT"],
+  ])("does not report readiness after startup %s", async (failure, code) => {
+    vi.useFakeTimers()
+    const { sessions, children } = setup(undefined, false)
+    const controller = new AbortController()
+    try {
+      const completed = vi.fn()
+      const pending = sessions.create(config, resolve, controller.signal)
+      void pending.then(completed, () => {})
+      const rejection = expect(pending).rejects.toMatchObject({ code })
+      await Promise.resolve()
+      const output = children[0].output
+      output.write(media.init)
+      output.write(timedFragment(0.5, true))
+      if (failure === "cancel") controller.abort()
+      else if (failure === "close") children[0].emit("close", 1)
+      else if (failure === "invalid") output.write(Buffer.alloc(8))
+      else await vi.advanceTimersByTimeAsync(20_001)
+      await rejection
+      output.write(media.media)
+      children[0].emit("close", 0)
+      await Promise.resolve()
+      expect(completed).not.toHaveBeenCalled()
+      expect(children[0].kill).toHaveBeenCalledExactlyOnceWith("SIGKILL")
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      sessions.dispose()
+      vi.useRealTimers()
+    }
+  })
   it("requires three target durations before becoming ready when the target exceeds one second", async () => {
     const { sessions, children } = setup(undefined, false)
     try {
@@ -255,6 +402,7 @@ describe("live copy-only lifecycle", () => {
       expect(ready).toBe(false)
       output.write(timedFragment(1.6))
       const session = await pending
+      expect(session.targetDurationSeconds).toBe(2)
       expect(sessions.playlist(session.id)).toContain(
         "#EXT-X-TARGETDURATION:2\n"
       )
@@ -264,6 +412,329 @@ describe("live copy-only lifecycle", () => {
           0
         )
       ).toBeCloseTo(6, 3)
+    } finally {
+      sessions.dispose()
+    }
+  })
+  it.each([
+    {
+      target: 1,
+      duration: 0.5,
+      gopFragments: 8,
+      fragmentCount: 36,
+      firstSequence: 8,
+      startSequence: 24,
+      offset: -6,
+    },
+    {
+      target: 2,
+      duration: 2,
+      gopFragments: 4,
+      fragmentCount: 16,
+      firstSequence: 8,
+      startSequence: 12,
+      offset: -8,
+    },
+  ])(
+    "starts target-$target live playlists at the latest safe independent fragment",
+    async ({
+      target,
+      duration,
+      gopFragments,
+      fragmentCount,
+      firstSequence,
+      startSequence,
+      offset,
+    }) => {
+      const { sessions, children } = setup(undefined, false)
+      try {
+        const pending = sessions.create(config, resolve, signal())
+        await Promise.resolve()
+        const output = children[0].output
+        output.write(media.init)
+        output.write(timedFragment(duration, false, 100))
+        const initialCount = (3 * target) / duration
+        for (let index = 0; index < initialCount; index++)
+          output.write(
+            timedFragment(
+              duration,
+              index % gopFragments === 0,
+              index * duration
+            )
+          )
+        const session = await pending
+        const initial = sessions.playlist(session.id)
+        expect(session.targetDurationSeconds).toBe(target)
+        expect(playlistStartOffset(initial)).toBe(-3 * target)
+        expect(playlistStartOffset(initial)).toBeLessThan(0)
+        expect(playlistEntries(initial)).toHaveLength(initialCount)
+        expect(sessions.audio(session.id, -1).videoStartSeconds).toBe(0)
+        expect(
+          splitFragmentedMp4(
+            Buffer.concat([media.init, sessions.asset(session.id, "0.m4s")])
+          ).startsWithKeyframe
+        ).toBe(true)
+        for (let index = initialCount; index < fragmentCount; index++)
+          output.write(
+            timedFragment(
+              duration,
+              index % gopFragments === 0,
+              index * duration
+            )
+          )
+        const playlist = sessions.playlist(session.id)
+        const entries = playlistEntries(playlist)
+        const retained = entries.map((entry) =>
+          splitFragmentedMp4(
+            Buffer.concat([media.init, sessions.asset(session.id, entry.asset)])
+          )
+        )
+        const total = entries.reduce((sum, entry) => sum + entry.duration, 0)
+        const edge =
+          retained.at(-1)!.decodeStartSeconds +
+          retained.at(-1)!.decodeDurationSeconds
+        const actualOffset = playlistStartOffset(playlist)
+        const selected = retained.find(
+          (fragment) =>
+            Math.abs(fragment.decodeStartSeconds - (edge + actualOffset)) <=
+            1.001e-6
+        )
+        const eligible = retained.filter(
+          (fragment) =>
+            fragment.startsWithKeyframe &&
+            edge - fragment.decodeStartSeconds >= 3 * target
+        )
+        expect(playlist).toContain(`#EXT-X-TARGETDURATION:${target}\n`)
+        expect(playlist).not.toContain("#EXT-X-INDEPENDENT-SEGMENTS")
+        expect(total).toBeGreaterThanOrEqual(12)
+        expect(entries[0].asset).toBe(`${firstSequence}.m4s`)
+        expect(retained[0].startsWithKeyframe).toBe(true)
+        expect(Math.abs(actualOffset - offset)).toBeLessThanOrEqual(1.001e-6)
+        expect(actualOffset).toBeLessThanOrEqual(-3 * target)
+        expect(total + actualOffset).toBeGreaterThan(0)
+        expect(selected?.startsWithKeyframe).toBe(true)
+        expect(selected?.decodeStartSeconds).toBe(startSequence * duration)
+        expect(selected).toBe(eligible.at(-1))
+        expect(
+          retained
+            .slice(0, retained.indexOf(selected!))
+            .some((fragment) => !fragment.startsWithKeyframe)
+        ).toBe(true)
+        expect(() => sessions.asset(session.id, "0.m4s")).toThrow()
+        expect(children[0].kill).not.toHaveBeenCalled()
+      } finally {
+        sessions.dispose()
+      }
+    }
+  )
+  it("omits a start hint when first-window EXTINF rounding leaves less than three target durations", async () => {
+    const { sessions, children } = setup(undefined, false)
+    try {
+      const pending = sessions.create(config, resolve, signal())
+      await Promise.resolve()
+      const output = children[0].output
+      output.write(media.init)
+      for (let index = 0; index < 9; index++)
+        output.write(timedFragment(1 / 3, index === 0, index / 3))
+      const session = await pending
+      const playlist = sessions.playlist(session.id)
+      const entries = playlistEntries(playlist)
+      const serializedDuration = entries.reduce(
+        (sum, entry) => sum + entry.duration,
+        0
+      )
+      expect(session.targetDurationSeconds).toBe(1)
+      expect(entries).toHaveLength(9)
+      expect(entries.every((entry) => entry.duration === 0.333333)).toBe(true)
+      expect(serializedDuration).toBeCloseTo(2.999997, 9)
+      expect(serializedDuration).toBeLessThan(3)
+      expect(playlist).not.toContain("#EXT-X-START:")
+      expect(entries[0].asset).toBe("0.m4s")
+      expect(
+        splitFragmentedMp4(
+          Buffer.concat([media.init, sessions.asset(session.id, "0.m4s")])
+        ).startsWithKeyframe
+      ).toBe(true)
+
+      // Exercise the installed engine's no-offset live-start branch without
+      // network requests or a browser MediaSource implementation.
+      const { default: Hls } = await import("hls.js")
+      const hls = new Hls({
+        autoStartLoad: false,
+        enableWorker: false,
+        lowLatencyMode: false,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 6,
+      })
+      try {
+        const details = {
+          live: true,
+          startTimeOffset: null,
+          edge: serializedDuration,
+          totalduration: serializedDuration,
+          targetduration: 1,
+          holdBack: 0,
+          partHoldBack: 0,
+          age: 0,
+          fragmentStart: 0,
+        }
+        const controller = (
+          hls as unknown as {
+            streamController: {
+              levels: { details: typeof details }[]
+              levelLastLoaded: { details: typeof details }
+              startPosition: number
+              nextLoadPosition: number
+              setStartPosition(level: typeof details, sliding: number): void
+            }
+          }
+        ).streamController
+        const level = { details }
+        controller.levels = [level]
+        controller.levelLastLoaded = level
+        controller.setStartPosition(details, 0)
+        expect(hls.liveSyncPosition).toBe(0)
+        expect(controller.startPosition).toBe(-1)
+        expect(controller.nextLoadPosition).toBe(0)
+      } finally {
+        hls.destroy()
+      }
+
+      output.write(timedFragment(1 / 3, false, 3))
+      const nextPlaylist = sessions.playlist(session.id)
+      expect(playlistStartOffset(nextPlaylist)).toBeCloseTo(-3.33333, 9)
+      expect(playlistEntries(nextPlaylist)).toHaveLength(10)
+      expect(children[0].kill).not.toHaveBeenCalled()
+    } finally {
+      sessions.dispose()
+    }
+  })
+  it("keeps the full three-target holdback after moving an interior start hint", async () => {
+    const { sessions, children } = setup(undefined, false)
+    try {
+      const pending = sessions.create(config, resolve, signal())
+      await Promise.resolve()
+      const output = children[0].output
+      output.write(media.init)
+      const feed = (index: number) =>
+        output.write(timedFragment(0.5, index % 6 === 0, index * 0.5))
+      for (let index = 0; index < 6; index++) feed(index)
+      const session = await pending
+      // At the window head there is no preceding dependent fragment to avoid.
+      expect(playlistStartOffset(sessions.playlist(session.id))).toBe(-3)
+      for (let index = 6; index < 36; index++) feed(index)
+
+      const playlist = sessions.playlist(session.id)
+      const entries = playlistEntries(playlist)
+      const fragments = entries.map((entry) =>
+        splitFragmentedMp4(
+          Buffer.concat([media.init, sessions.asset(session.id, entry.asset)])
+        )
+      )
+      const independent = fragments.filter(
+        (fragment) => fragment.startsWithKeyframe
+      )
+      const edge = fragments.at(-1)!.decodeStartSeconds + 0.5
+      const offset = playlistStartOffset(playlist)
+      const position = edge + offset
+      const selected = fragments.find(
+        (fragment) =>
+          position >= fragment.decodeStartSeconds &&
+          position <
+            fragment.decodeStartSeconds + fragment.decodeDurationSeconds
+      )
+      expect(entries[0].asset).toBe("12.m4s")
+      expect(edge - independent.at(-1)!.decodeStartSeconds).toBe(3)
+      expect(offset).toBeLessThanOrEqual(-3)
+      expect(Math.abs(offset + 5.999999)).toBeLessThan(1e-9)
+      expect(selected).toBe(independent.at(-2))
+      expect(selected).not.toBe(fragments[0])
+      expect(selected?.decodeStartSeconds).toBe(12)
+      expect(selected?.startsWithKeyframe).toBe(true)
+      expect(playlist).toContain("PRECISE=NO\n")
+      expect(children[0].kill).not.toHaveBeenCalled()
+    } finally {
+      sessions.dispose()
+    }
+  })
+  it("keeps noninteger 30fps start hints inside an independent fragment on the serialized HLS clock", async () => {
+    type Fragment = {
+      sn: number
+      start: number
+      duration: number
+      independent: boolean
+    }
+    // Import the installed finder without type-checking hls.js's build-only
+    // source globals. No copy of its lookup logic is maintained in this test.
+    const dependency =
+      "../node_modules/hls.js/src/controller/fragment-finders.ts"
+    const { findFragmentByPTS } = await vi.importActual<{
+      findFragmentByPTS(
+        previous: null,
+        fragments: Fragment[],
+        position: number,
+        tolerance: number
+      ): Fragment | null
+    }>(dependency)
+    const { sessions, children } = setup(undefined, false)
+    const sourceTimescale = 30_000
+    const duration = 16 / 30
+    const init = Buffer.from(media.init)
+    childBox(init, "moov", "trak", "mdia", "mdhd").writeUInt32BE(
+      sourceTimescale,
+      12
+    )
+    try {
+      const pending = sessions.create(config, resolve, signal())
+      await Promise.resolve()
+      const output = children[0].output
+      output.write(init)
+      const feed = (index: number) =>
+        output.write(
+          timedFragment(
+            duration,
+            index % 6 === 0,
+            index * duration,
+            sourceTimescale
+          )
+        )
+      for (let index = 0; index < 6; index++) feed(index)
+      const session = await pending
+      for (let index = 6; index < 36; index++) feed(index)
+
+      const playlist = sessions.playlist(session.id)
+      const entries = playlistEntries(playlist)
+      let edge = 0
+      const fragments: Fragment[] = entries.map((entry) => {
+        const encoded = splitFragmentedMp4(
+          Buffer.concat([init, sessions.asset(session.id, entry.asset)])
+        )
+        const fragment = {
+          sn: Number(entry.asset.slice(0, -4)),
+          start: edge,
+          duration: entry.duration,
+          independent: encoded.startsWithKeyframe,
+        }
+        edge += entry.duration
+        return fragment
+      })
+      const offset = playlistStartOffset(playlist)
+      const position = Math.max(0, edge + offset)
+      // hls.js explicitly uses zero lookup tolerance for its first fragment.
+      const selected = findFragmentByPTS(null, fragments, position, 0)
+      expect(fragments[0].sn).toBe(12)
+      expect(fragments[0].independent).toBe(true)
+      expect(
+        fragments.every((fragment) => fragment.duration === 0.533333)
+      ).toBe(true)
+      expect(selected?.sn).toBe(30)
+      expect(selected?.independent).toBe(true)
+      expect(position).toBeGreaterThan(selected!.start)
+      expect(position - selected!.start).toBeLessThanOrEqual(1.001e-6)
+      expect(position).toBeLessThan(selected!.start + selected!.duration)
+      expect(-offset).toBeGreaterThanOrEqual(3)
+      expect(playlist).toContain("PRECISE=NO\n")
+      expect(children[0].kill).not.toHaveBeenCalled()
     } finally {
       sessions.dispose()
     }
@@ -604,6 +1075,13 @@ describe("live copy-only lifecycle", () => {
       const response = await post({ track: "101" }),
         session = await response.json()
       expect(response.status).toBe(201)
+      expect(session.targetDurationSeconds).toBe(1)
+      expect(session.startup).toEqual({
+        firstByteMs: expect.any(Number),
+        firstFragmentMs: expect.any(Number),
+        firstIndependentFragmentMs: expect.any(Number),
+        readyMs: expect.any(Number),
+      })
       const playlist = await app.request(session.playlistUrl)
       expect(playlist.status).toBe(200)
       expect(playlist.headers.get("cache-control")).toBe("no-store")

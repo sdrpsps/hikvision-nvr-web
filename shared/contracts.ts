@@ -98,16 +98,28 @@ export const transferEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
   z.object({ type: z.literal("end"), reason: z.literal("timeout") }),
 ])
-export const liveSchema = previewSchema.omit({
-  fileRange: true,
-  mediaStartAt: true,
-  fileDurationSeconds: true,
-  source: true,
-  startOffsetSeconds: true,
-  durationSeconds: true,
-  estimatedDurationSeconds: true,
-  totalDurationSeconds: true,
+// Elapsed server creation time, not camera-to-screen latency.
+export const liveStartupSchema = z.object({
+  firstByteMs: z.number().finite().nonnegative(),
+  firstFragmentMs: z.number().finite().nonnegative(),
+  firstIndependentFragmentMs: z.number().finite().nonnegative(),
+  readyMs: z.number().finite().nonnegative(),
 })
+export const liveSchema = previewSchema
+  .omit({
+    fileRange: true,
+    mediaStartAt: true,
+    fileDurationSeconds: true,
+    source: true,
+    startOffsetSeconds: true,
+    durationSeconds: true,
+    estimatedDurationSeconds: true,
+    totalDurationSeconds: true,
+  })
+  .extend({
+    startup: liveStartupSchema.optional(),
+    targetDurationSeconds: z.number().finite().positive().optional(),
+  })
 export type LiveStream = z.infer<typeof liveSchema>
 
 export const liveAudioSchema = z.object({

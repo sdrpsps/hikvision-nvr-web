@@ -96,6 +96,8 @@ Opening the page or adding panes does not start streams automatically. Each pane
 
 Each live preview currently lasts **at most 10 minutes**, after which you must start it again. Independent recording tasks are not affected by this preview limit.
 
+Live viewing starts at a random-access frame near the media edge while retaining the preceding GOP dependencies. Excessive lag can skip old content to catch up, without changing an independent recording's source or output. This remains ordinary HLS, not LL-HLS, and does not measure camera-to-screen latency. Failures still require a manual retry; there is no infinite reconnect loop.
+
 ### Keep page selections in the URL
 
 Page selections use nuqs. Copying or bookmarking the current address, or refreshing it, restores the state represented by these parameters:
@@ -205,3 +207,5 @@ pnpm test:e2e
 ```
 
 Real-device tests require explicit opt-in environment variables. Check the individual cases in `tests/browser/` and confirm the scope of streaming, saving, and device operations before running them. Follow [AGENTS.md](AGENTS.md) for development constraints. Report test results in the task response rather than maintaining separate development plans or verification logs.
+
+The active video element's `data-live-startup` attribute exposes numeric startup diagnostics. `server` separates the first output byte, complete media fragment, independent fragment, and buffer readiness. Browser timings start at the preview request and distinguish the API response, player mount, `playing`, and the first `requestVideoFrameCallback`. The latter observes a frame submitted for display without reading pixels; unsupported browsers leave `firstFrameMs` as `null`, rather than substituting `playing`. These diagnostics live only with the current player, with no persistent logs or media capture. Compare cold-page and repeated starts alongside failures, stalls, and decoded/dropped frames; synthetic results do not establish a device speedup.

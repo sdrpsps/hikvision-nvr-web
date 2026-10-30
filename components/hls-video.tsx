@@ -58,6 +58,7 @@ export function HlsVideo({
   const video = useRef<HTMLVideoElement>(null)
   const [paused, setPaused] = useState(true)
   const [liveStarted, setLiveStarted] = useState(false)
+  const onLiveStarted = useCallback(() => setLiveStarted(true), [])
   const [rate, setRate] = useState(initialPreferences?.rate ?? 1)
   const reportError = useCallback(
     (message: string, operation: string) => {
@@ -102,6 +103,7 @@ export function HlsVideo({
     onPreferencesChange,
     onError,
     reportError,
+    onLiveStarted,
   })
   const recording = "durationSeconds" in session ? session : undefined
   const serverSeek = recording?.source === "shttp"
@@ -147,8 +149,7 @@ export function HlsVideo({
             setPaused(false)
           }}
           onPlaying={() => {
-            if (live) setLiveStarted(true)
-            else if (seekTarget.current === null) setHistoryReady(true)
+            if (!live && seekTarget.current === null) setHistoryReady(true)
           }}
           onPause={() => setPaused(true)}
           onEnded={(event) => {

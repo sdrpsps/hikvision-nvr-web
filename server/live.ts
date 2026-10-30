@@ -4,6 +4,7 @@ import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
 import { splitFragmentedMp4 } from "./mp4"
 import { copiedAudio, CopiedAudioParser } from "./live-audio"
+import { LIVE_SYNC_DURATION_COUNT } from "../shared/live-policy"
 
 export const LIVE_TTL_MS = 10 * 60_000
 export const LIVE_IDLE_MS = 30_000
@@ -109,7 +110,7 @@ function trimLiveWindow(session: Session) {
   // Every published window starts at a random-access frame. Dependent short
   // fragments remain playable because their preceding GOP is retained.
   trim(Math.max(12, target * 6))
-  if (exceedsLimit()) trim(target * 3)
+  if (exceedsLimit()) trim(target * LIVE_SYNC_DURATION_COUNT)
   if (exceedsLimit())
     throw new AppError(
       "LIVE_BUFFER_LIMIT",
@@ -130,6 +131,12 @@ export class LiveSessions {
     resolve: () => Promise<string>,
     signal: AbortSignal
   ) {
+    const startedAt = performance.now()
+    const elapsed = () => Math.max(0, performance.now() - startedAt)
+    let firstByteMs: number | undefined,
+      firstFragmentMs: number | undefined,
+      firstIndependentFragmentMs: number | undefined,
+      readyMs: number | undefined
     if (this.sessions.size >= MAX_LIVE_SESSIONS)
       throw new AppError(
         "MEDIA_BUSY",
@@ -228,6 +235,8 @@ export class LiveSessions {
         })
       child.stdout?.on("data", (chunk: Buffer) => {
         if (!this.sessions.has(id)) return
+        // Output headers can precede any complete media fragment.
+        if (chunk.length) firstByteMs ??= elapsed()
         try {
           if (pending.length + chunk.length > MAX_BOX_BYTES) throw new Error()
           pending = Buffer.concat([pending, chunk])
@@ -256,11 +265,14 @@ export class LiveSessions {
               const media = splitFragmentedMp4(
                 Buffer.concat([session.init, data])
               )
+              firstFragmentMs ??= elapsed()
               fragment = Buffer.alloc(0)
               // A connection can begin between keyframes. Never publish that
               // undecodable prefix or use it as the audio/video time anchor.
               if (!session.segments.length && !media.startsWithKeyframe)
                 continue
+              if (media.startsWithKeyframe)
+                firstIndependentFragmentMs ??= elapsed()
               session.targetDuration ??= Math.max(
                 1,
                 Math.ceil(media.decodeDurationSeconds)
@@ -284,9 +296,14 @@ export class LiveSessions {
               if (
                 session.segments.reduce((sum, item) => sum + item.duration, 0) +
                   1e-6 >=
-                Math.max(STARTUP_BUFFER_SECONDS, session.targetDuration * 3)
-              )
+                Math.max(
+                  STARTUP_BUFFER_SECONDS,
+                  session.targetDuration * LIVE_SYNC_DURATION_COUNT
+                )
+              ) {
+                readyMs ??= elapsed()
                 resolveReady()
+              }
             }
           }
         } catch (error) {
@@ -308,6 +325,13 @@ export class LiveSessions {
         expiresAt: new Date(expiresAt).toISOString(),
         mode: "stream-copy" as const,
         codec: session.codec!,
+        targetDurationSeconds: session.targetDuration!,
+        startup: {
+          firstByteMs: firstByteMs!,
+          firstFragmentMs: firstFragmentMs!,
+          firstIndependentFragmentMs: firstIndependentFragmentMs!,
+          readyMs: readyMs!,
+        },
       }
     } catch (error) {
       this.delete(id)
@@ -335,7 +359,27 @@ export class LiveSessions {
   }
   playlist(id: string) {
     const { segments, targetDuration } = this.get(id)
-    return `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:${segments[0]?.sequence ?? 0}\n#EXT-X-START:TIME-OFFSET=0,PRECISE=NO\n#EXT-X-MAP:URI="init.mp4"\n${segments.map((s) => `#EXTINF:${s.duration.toFixed(6)},\n${s.sequence}.m4s\n`).join("")}`
+    const durations = segments.map((segment) => segment.duration.toFixed(6))
+    let offsetUs = 0
+    let startHint = ""
+    // Pick a random-access boundary near the edge, retaining the entire GOP
+    // before dependent short fragments and at least three target durations.
+    for (let index = segments.length - 1; index >= 0; index--) {
+      offsetUs -= Math.round(Number(durations[index]) * 1_000_000)
+      const hintOffsetUs = offsetUs + (index > 0 ? 1 : 0)
+      if (
+        segments[index].independent &&
+        -hintOffsetUs >= targetDuration! * LIVE_SYNC_DURATION_COUNT * 1_000_000
+      ) {
+        // Match EXTINF's serialized clock and avoid its floating-point boundary.
+        // PRECISE=NO retains the leading keyframe; this only moves the hint.
+        startHint = `#EXT-X-START:TIME-OFFSET=${(hintOffsetUs / 1_000_000).toFixed(6)},PRECISE=NO\n`
+        break
+      }
+    }
+    // A short serialized first window can have no compliant hint; leave its
+    // initial position to the HLS engine instead of reducing the holdback.
+    return `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:${segments[0]?.sequence ?? 0}\n${startHint}#EXT-X-MAP:URI="init.mp4"\n${segments.map((s, index) => `#EXTINF:${durations[index]},\n${s.sequence}.m4s\n`).join("")}`
   }
   audio(id: string, after: number) {
     const session = this.get(id)

@@ -13,6 +13,7 @@ import {
   type previewRequestSchema,
 } from "@/shared/contracts"
 import type { AudioLoader } from "@/lib/live-audio"
+import { recordLiveRequest } from "@/lib/live-metrics"
 
 type LiveInput = z.infer<typeof liveRequestSchema> & { signal: AbortSignal }
 type PlaybackInput = z.infer<typeof previewRequestSchema> & {
@@ -33,8 +34,9 @@ export function useCreateLiveStream() {
   return useMutation({
     ...sessionMutationOptions,
     mutationKey: ["streams", "create", "live"],
-    mutationFn: ({ signal, ...input }: LiveInput) =>
-      requestJson(
+    mutationFn: async ({ signal, ...input }: LiveInput) => {
+      const startedAt = performance.now()
+      const session = await requestJson(
         "/api/streams/live",
         liveSchema,
         {
@@ -44,7 +46,9 @@ export function useCreateLiveStream() {
           signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
         },
         prepareMessages
-      ),
+      )
+      return recordLiveRequest(session, startedAt)
+    },
   })
 }
 
