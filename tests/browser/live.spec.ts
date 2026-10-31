@@ -1252,6 +1252,19 @@ for (const codec of ["h264", "hevc"] as const)
       )
       .toBe(true)
     await expect(first.getByRole("button", { name: "停止预览" })).toBeVisible()
+    if (codec === "h264") {
+      const fullscreenControls = first.locator(".fullscreen-controls")
+      await expect(fullscreenControls).toHaveAttribute("inert", "", {
+        timeout: 5000,
+      })
+      await expect(fullscreenControls).toHaveCSS("opacity", "0")
+      await page.mouse.move(100, 100)
+      await expect(fullscreenControls).not.toHaveAttribute("inert")
+      await expect(fullscreenControls).toHaveCSS("opacity", "1")
+      await expect(
+        first.getByRole("button", { name: "停止预览" })
+      ).toBeVisible()
+    }
     await page.evaluate(() => document.exitFullscreen())
     await first.getByRole("switch", { name: "声音" }).click()
     await expect(first.getByRole("switch", { name: "声音" })).toBeChecked()

@@ -272,6 +272,14 @@ for (const codec of ["h264", "hevc"] as const) {
         page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState)
       )
       .toBeGreaterThanOrEqual(3)
+    await page.locator(".playback-surface-button").hover()
+    await expect(page.locator(".playback-surface-button svg")).toHaveCount(0)
+    await page.locator(".playback-surface-button").click()
+    await expect(
+      page.locator(".playback-surface-button .lucide-play")
+    ).toBeVisible()
+    await page.locator(".playback-surface-button").press("Space")
+    await expect(page.locator(".playback-surface-button svg")).toHaveCount(0)
     const picture = await page.locator("video").boundingBox()
     expect(picture!.width / picture!.height).toBeCloseTo(16 / 9, 2)
     expect(picture!.height).toBeCloseTo(idle!.height, 0)
@@ -279,6 +287,50 @@ for (const codec of ["h264", "hevc"] as const) {
     await expect
       .poll(() => page.evaluate(() => !!document.fullscreenElement))
       .toBe(true)
+    if (codec === "h264") {
+      const fullscreenControls = page.locator(".fullscreen-controls")
+      const background = await page
+        .getByLabel("回放时间轴区域")
+        .evaluate((element) => getComputedStyle(element).backgroundColor)
+      expect(background).not.toBe("rgba(0, 0, 0, 0)")
+      await expect(page.locator(".live-video-controls")).toHaveCSS(
+        "background-color",
+        background
+      )
+      await fullscreenControls.evaluate((element) => {
+        element.addEventListener("transitionrun", (event) => {
+          if (
+            event.target === element &&
+            (event as TransitionEvent).propertyName === "opacity"
+          ) {
+            element.dataset.opacityTransitions = String(
+              Number(element.dataset.opacityTransitions ?? 0) + 1
+            )
+          }
+        })
+      })
+      await expect(fullscreenControls).toHaveAttribute("inert", "", {
+        timeout: 5000,
+      })
+      await expect(fullscreenControls).toHaveCSS("opacity", "0")
+      await expect(fullscreenControls).toHaveAttribute(
+        "data-opacity-transitions",
+        "1"
+      )
+      await page.mouse.move(100, 100)
+      await expect(fullscreenControls).not.toHaveAttribute("inert")
+      await expect(fullscreenControls).toHaveCSS("opacity", "1")
+      await expect(fullscreenControls).toHaveAttribute(
+        "data-opacity-transitions",
+        "2"
+      )
+      await expect(page.getByLabel("回放时间轴区域")).toBeVisible()
+      await page.getByRole("button", { name: "播放倍速" }).click()
+      await page.waitForTimeout(3500)
+      await expect(fullscreenControls).toHaveCSS("opacity", "1")
+      await expect(page.locator('[data-slot="popover-content"]')).toBeVisible()
+      await page.keyboard.press("Escape")
+    }
     await expect(
       page.getByRole("button", { name: "暂停录像", exact: true })
     ).toBeVisible()

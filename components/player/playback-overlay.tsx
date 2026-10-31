@@ -1,6 +1,6 @@
 "use client"
 
-import { LoaderCircleIcon, PauseIcon, PlayIcon } from "lucide-react"
+import { LoaderCircleIcon, PlayIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 
@@ -25,19 +25,20 @@ export function PlaybackOverlay({
     <>
       {!live && !historyLoading && (
         <Button
-          className="playback-surface-button group/playback absolute inset-0 size-full rounded-none border-0 bg-transparent p-0 hover:bg-transparent active:translate-none"
+          className="playback-surface-button absolute inset-0 size-full rounded-none border-0 bg-transparent p-0 hover:bg-transparent active:translate-none"
           variant="ghost"
-          data-paused={paused}
           aria-label={paused ? "播放录像" : "暂停录像"}
           title={paused ? "播放录像" : "暂停录像"}
           onClick={togglePlayback}
         >
-          <span
-            className="flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity duration-100 group-hover/playback:opacity-100 group-focus-visible/playback:opacity-100 group-data-[paused=true]/playback:opacity-100 [&>svg]:size-6"
-            aria-hidden="true"
-          >
-            {paused ? <PlayIcon /> : <PauseIcon />}
-          </span>
+          {paused && (
+            <span
+              className="flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground [&>svg]:size-6"
+              aria-hidden="true"
+            >
+              <PlayIcon />
+            </span>
+          )}
         </Button>
       )}
       {live && !liveStarted && (

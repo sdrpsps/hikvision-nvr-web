@@ -55,7 +55,7 @@ export function RecordingDistribution({
   return (
     <section
       className={cn(
-        "recording-distribution p-4 max-md:p-3 video-fullscreen:col-start-1 video-fullscreen:row-start-2 video-fullscreen:w-full video-fullscreen:shrink-0 video-fullscreen:rounded-none video-fullscreen:px-4 video-fullscreen:py-3",
+        "recording-distribution p-4 max-md:p-3 video-fullscreen:col-start-1 video-fullscreen:row-start-2 video-fullscreen:w-full video-fullscreen:shrink-0 video-fullscreen:rounded-none video-fullscreen:bg-card video-fullscreen:px-4 video-fullscreen:py-3",
         embedded
           ? "rounded-none border-x-0 border-t border-b-0"
           : "rounded-lg border bg-card"

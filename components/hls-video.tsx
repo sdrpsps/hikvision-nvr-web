@@ -22,6 +22,7 @@ import { usePlaybackPosition } from "./player/use-playback-position"
 import { useHlsMedia } from "./player/use-hls-media"
 import { PlaybackOverlay } from "./player/playback-overlay"
 import { VideoControls } from "./player/video-controls"
+import { useFullscreenControls } from "./player/use-fullscreen-controls"
 
 export type { PlaybackPreferences } from "./player/types"
 
@@ -57,6 +58,7 @@ export function HlsVideo({
   timeline?: ReactNode
 }) {
   const video = useRef<HTMLVideoElement>(null)
+  const controlsHidden = useFullscreenControls(frame)
   const [paused, setPaused] = useState(true)
   const [liveStarted, setLiveStarted] = useState(false)
   const onLiveStarted = useCallback(() => setLiveStarted(true), [])
@@ -129,7 +131,7 @@ export function HlsVideo({
         "video-surface group/video [container-type:inline-size] relative min-w-0",
         live
           ? "size-full"
-          : "fullscreen:grid fullscreen:grid-rows-[minmax(0,1fr)_auto_auto] fullscreen:bg-black",
+          : "fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black",
         live &&
           "fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black"
       )}
@@ -143,7 +145,7 @@ export function HlsVideo({
           "playback-frame relative min-h-0 min-w-0",
           live
             ? "size-full video-fullscreen:h-0 video-fullscreen:w-full video-fullscreen:flex-1"
-            : "video-fullscreen:col-start-1 video-fullscreen:row-start-1 video-fullscreen:h-auto video-fullscreen:w-full"
+            : "video-fullscreen:h-0 video-fullscreen:w-full video-fullscreen:flex-1"
         )}
       >
         <video
@@ -214,30 +216,39 @@ export function HlsVideo({
           togglePlayback={togglePlayback}
         />
       </div>
-      {timeline}
-      <VideoControls
-        live={live}
-        videoRef={video}
-        frame={frame}
-        pendingSeek={historyLoading ? pendingSeek : null}
-        cancelSeek={cancelSeek}
-        rate={rate}
-        setRate={setRate}
-        sound={sound}
-        toggleSound={toggleSound}
-        position={position + fileOffset}
-        totalDuration={fileDuration}
-        clipSource={
-          clipSource
-            ? { ...clipSource, fileStartAt: recording?.fileRange?.startAt }
-            : undefined
-        }
-        actions={actions}
-        onPreferencesChange={onPreferencesChange}
-        reportError={reportError}
-        stepSeek={stepSeek}
-        initialStepSeconds={initialPreferences?.stepSeconds}
-      />
+      <div
+        inert={controlsHidden}
+        className={cn(
+          "fullscreen-controls contents video-fullscreen:absolute video-fullscreen:inset-x-0 video-fullscreen:bottom-0 video-fullscreen:z-10 video-fullscreen:block video-fullscreen:transition-opacity video-fullscreen:duration-200 motion-reduce:video-fullscreen:transition-none",
+          controlsHidden &&
+            "video-fullscreen:pointer-events-none video-fullscreen:opacity-0"
+        )}
+      >
+        {timeline}
+        <VideoControls
+          live={live}
+          videoRef={video}
+          frame={frame}
+          pendingSeek={historyLoading ? pendingSeek : null}
+          cancelSeek={cancelSeek}
+          rate={rate}
+          setRate={setRate}
+          sound={sound}
+          toggleSound={toggleSound}
+          position={position + fileOffset}
+          totalDuration={fileDuration}
+          clipSource={
+            clipSource
+              ? { ...clipSource, fileStartAt: recording?.fileRange?.startAt }
+              : undefined
+          }
+          actions={actions}
+          onPreferencesChange={onPreferencesChange}
+          reportError={reportError}
+          stepSeek={stepSeek}
+          initialStepSeconds={initialPreferences?.stepSeconds}
+        />
+      </div>
     </div>
   )
 }
