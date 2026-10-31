@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/sdrpsps/hikvision-nvr-web/compare/v1.0.0...v1.0.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* improve fullscreen player controls ([6dfaba9](https://github.com/sdrpsps/hikvision-nvr-web/commit/6dfaba925ea0dcd6ef88d3dd21f16aa0757ce0b2))
+
 ## [1.0.0](https://github.com/sdrpsps/hikvision-nvr-web/compare/v0.0.1...v1.0.0) (2026-10-30)
 
 
