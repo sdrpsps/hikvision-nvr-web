@@ -26,11 +26,11 @@ export function SaveTaskItem({ task }: { task: SaveTask }) {
   return (
     <li
       key={task.id}
-      className="save-task-item"
+      className="save-task-item flex flex-col gap-2 border-t py-4 [&>[data-slot=button]]:mt-1 [&>[data-slot=button]]:self-start"
       data-state={task.state}
       data-mode={task.source.mode}
     >
-      <div className="save-task-heading">
+      <div className="save-task-heading flex items-center gap-2 [&>strong]:min-w-0 [&>strong]:flex-1 [&>strong]:font-semibold">
         <strong className="truncate">{task.source.channelName}</strong>
         <span className="text-xs text-muted-foreground">
           {task.source.mode === "live" ? "录制" : "下载"}
@@ -57,7 +57,7 @@ export function SaveTaskItem({ task }: { task: SaveTask }) {
           </Button>
         )}
       </div>
-      <p className="save-task-metrics">
+      <p className="save-task-metrics flex flex-wrap gap-x-4 gap-y-1.5 text-sm tabular-nums">
         {task.source.mode === "history" && active(task) && task.bytes === 0 ? (
           <span>已读取 {formatBytes(task.sourceBytes)}</span>
         ) : (

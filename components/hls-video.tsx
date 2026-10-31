@@ -9,6 +9,7 @@ import {
 } from "react"
 import { toast } from "sonner"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
+import { cn } from "@/lib/utils"
 import type { ClipSource } from "@/components/clip-export"
 import type { PlaybackTimeRequest } from "@/lib/playback-clock"
 import { playbackOffset } from "@/lib/playback-clock"
@@ -124,16 +125,35 @@ export function HlsVideo({
   }
   return (
     <div
-      className="video-surface"
+      className={cn(
+        "video-surface group/video [container-type:inline-size] relative min-w-0",
+        live
+          ? "size-full"
+          : "fullscreen:grid fullscreen:grid-rows-[minmax(0,1fr)_auto_auto] fullscreen:bg-black",
+        live &&
+          "fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black"
+      )}
       ref={frame}
       data-live-starting={live && !liveStarted}
     >
       <SaveFullscreenActivity />
       {live && liveTrack && <LiveRecordingIndicator track={liveTrack} />}
-      <div className="playback-frame">
+      <div
+        className={cn(
+          "playback-frame relative min-h-0 min-w-0",
+          live
+            ? "size-full video-fullscreen:h-0 video-fullscreen:w-full video-fullscreen:flex-1"
+            : "video-fullscreen:col-start-1 video-fullscreen:row-start-1 video-fullscreen:h-auto video-fullscreen:w-full"
+        )}
+      >
         <video
           ref={video}
-          className="preview-video"
+          className={cn(
+            "block aspect-video w-full bg-black object-contain",
+            live ? "h-full max-h-none" : "max-h-none",
+            "video-fullscreen:aspect-auto video-fullscreen:h-full video-fullscreen:max-h-none video-fullscreen:min-h-0",
+            "[&::-webkit-media-controls-current-time-display]:hidden [&::-webkit-media-controls-time-remaining-display]:hidden [&::-webkit-media-controls-timeline]:hidden"
+          )}
           style={{
             visibility: !live && historyLoading ? "hidden" : undefined,
           }}

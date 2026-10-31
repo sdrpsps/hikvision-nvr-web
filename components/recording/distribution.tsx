@@ -3,6 +3,7 @@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
 import type { Recordings } from "@/shared/contracts"
+import { cn } from "@/lib/utils"
 import { duration } from "./format"
 import { RecordingTimeline } from "./timeline"
 
@@ -16,7 +17,7 @@ type DistributionProps = Pick<
   | "setZoom"
   | "selectSegment"
   | "dataUpdatedAt"
-> & { data: Recordings; selectionKey: string }
+> & { data: Recordings; selectionKey: string; embedded?: boolean }
 
 export function RecordingDistribution({
   data,
@@ -29,6 +30,7 @@ export function RecordingDistribution({
   selectSegment,
   dataUpdatedAt,
   selectionKey,
+  embedded = false,
 }: DistributionProps) {
   // This is a query snapshot. Future hours are neither covered nor missing yet.
   const observedEnd = data
@@ -51,7 +53,15 @@ export function RecordingDistribution({
         Date.parse(item.startAt) < Math.min(Date.parse(item.endAt), observedEnd)
     ) ?? []
   return (
-    <section className="recording-distribution" aria-label="回放时间轴区域">
+    <section
+      className={cn(
+        "recording-distribution p-4 max-md:p-3 video-fullscreen:col-start-1 video-fullscreen:row-start-2 video-fullscreen:w-full video-fullscreen:shrink-0 video-fullscreen:rounded-none video-fullscreen:px-4 video-fullscreen:py-3",
+        embedded
+          ? "rounded-none border-x-0 border-t border-b-0"
+          : "rounded-lg border bg-card"
+      )}
+      aria-label="回放时间轴区域"
+    >
       <RecordingTimeline
         key={selectionKey}
         data={data}
@@ -79,7 +89,7 @@ export function RecordingDistribution({
         onSelect={selectSegment}
         zoom={Number(zoom)}
       />
-      <div className="coverage-summary">
+      <div className="coverage-summary mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground [&_strong]:ml-1.5 [&_strong]:font-medium [&_strong]:text-foreground">
         <span>{data.segments.length} 个录像片段</span>
         <span>
           覆盖 <strong>{duration(coverage)}</strong>

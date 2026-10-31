@@ -7,6 +7,7 @@ import {
   VideoIcon,
 } from "lucide-react"
 import type { Channel } from "@/shared/contracts"
+import { cn } from "@/lib/utils"
 import { RenameChannel } from "@/components/rename-channel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -27,6 +28,7 @@ type ChannelSidebarProps = {
   onSelect: (track: string) => void
   onRefresh: () => void
   allowRename?: boolean
+  playback?: boolean
 }
 
 export function ChannelSidebarToggle({
@@ -69,22 +71,40 @@ export function ChannelSidebar({
   onSelect,
   onRefresh,
   allowRename = false,
+  playback = false,
 }: ChannelSidebarProps) {
   return (
     <aside
       id={id}
-      className="channel-sidebar"
+      className={cn(
+        "channel-sidebar grid min-w-0 [grid-template-rows:minmax(0,1fr)] overflow-hidden transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+        open
+          ? "opacity-100"
+          : "max-md:grid-rows-[0fr] max-md:opacity-0 md:opacity-0",
+        playback && open && "border-r max-md:border-r-0"
+      )}
       aria-label="设备通道"
       aria-hidden={!open}
       inert={!open}
     >
       <ScrollArea
-        className="channel-sidebar-scroll"
-        viewportProps={{ className: "channel-sidebar-viewport" }}
-        contentProps={{ className: "channel-sidebar-content" }}
+        className={cn(
+          "min-h-0 min-w-0 overflow-hidden",
+          playback && "max-h-[max(12rem,calc(100dvh-12rem))] max-md:max-h-none"
+        )}
+        viewportProps={{
+          className:
+            "channel-sidebar-viewport min-h-0 overflow-x-hidden! overflow-y-auto! max-md:overflow-hidden!",
+        }}
+        contentProps={{
+          className: cn(
+            "min-h-full w-[var(--channel-sidebar-width)] border-r px-2 py-3 max-md:min-h-0 max-md:w-auto max-md:border-r-0 max-md:border-b",
+            playback && "border-r-0"
+          ),
+        }}
       >
-        <div className="channel-heading">
-          <h2>设备通道</h2>
+        <div className="mb-2 flex items-center justify-between px-2">
+          <h2 className="text-[0.8125rem] font-semibold">设备通道</h2>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -124,10 +144,12 @@ export function ChannelSidebar({
           </Empty>
         )}
         <ScrollArea
-          className="channel-list-scroll"
-          viewportProps={{ className: "channel-list-viewport" }}
+          viewportProps={{
+            className:
+              "channel-list-viewport h-auto overflow-visible! max-md:max-h-32 max-md:overflow-x-hidden! max-md:overflow-y-auto!",
+          }}
         >
-          <ul className="channel-list">
+          <ul className="channel-list flex flex-col gap-0.5 max-md:grid max-md:grid-cols-2">
             {channels?.map((channel) => (
               <li key={channel.id} className="flex items-center gap-1">
                 <Button

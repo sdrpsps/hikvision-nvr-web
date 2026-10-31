@@ -2,6 +2,7 @@
 
 import { useId, type ReactNode, type RefObject } from "react"
 import { MaximizeIcon, Volume2Icon, VolumeXIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -51,8 +52,23 @@ export function VideoControls({
 }: ControlsProps) {
   const soundId = useId()
   return (
-    <div className="live-video-controls">
-      <div className="live-controls-left">
+    <div
+      className={cn(
+        "live-video-controls z-0 flex min-w-0 items-center justify-between gap-2",
+        live
+          ? "pointer-events-auto absolute inset-x-0 bottom-0 flex-nowrap bg-card/94 px-1.5 py-1.5 opacity-0 backdrop-blur-md transition-opacity duration-100 group-hover/window:opacity-100 group-has-[:focus-visible]/window:opacity-100 group-data-[live-starting=true]/video:z-[1] contrast-more:border-t contrast-more:border-foreground contrast-more:bg-card contrast-more:backdrop-blur-none [@media(hover:none)]:opacity-100 [@media(prefers-reduced-transparency:reduce)]:bg-card [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none"
+          : "flex-wrap gap-x-3 gap-y-2 px-2.5 py-2",
+        "video-fullscreen:pointer-events-auto video-fullscreen:static video-fullscreen:shrink-0 video-fullscreen:bg-card video-fullscreen:px-4 video-fullscreen:py-2 video-fullscreen:opacity-100",
+        !live &&
+          "video-fullscreen:col-start-1 video-fullscreen:row-start-3 video-fullscreen:w-full"
+      )}
+    >
+      <div
+        className={cn(
+          "live-controls-left flex min-w-0 shrink-0 items-center gap-2",
+          !live && "flex-wrap @max-[400px]:contents"
+        )}
+      >
         {!live && pendingSeek !== null && (
           <Button variant="ghost" size="sm" onClick={cancelSeek}>
             取消定位
@@ -83,7 +99,7 @@ export function VideoControls({
             onPreferencesChange={onPreferencesChange}
           />
         )}
-        <div className="sound-control">
+        <div className="sound-control flex shrink-0 items-center gap-2 px-1 @max-[400px]:gap-1 @max-[400px]:px-0">
           <Switch
             id={soundId}
             aria-label="声音"
@@ -95,16 +111,17 @@ export function VideoControls({
           />
           <Label htmlFor={soundId} title={sound ? "声音已开启" : "声音已静音"}>
             {sound ? (
-              <Volume2Icon aria-hidden="true" />
+              <Volume2Icon aria-hidden="true" className="size-4 shrink-0" />
             ) : (
-              <VolumeXIcon aria-hidden="true" />
+              <VolumeXIcon aria-hidden="true" className="size-4 shrink-0" />
             )}
-            <span className="control-label">声音</span>
+            <span className="@max-[400px]:hidden">声音</span>
           </Label>
         </div>
         <Button
           variant="ghost"
           size="sm"
+          className="@max-[400px]:w-7 @max-[400px]:gap-0 @max-[400px]:px-0"
           aria-label="全屏"
           title="全屏"
           onClick={async () => {
@@ -118,7 +135,7 @@ export function VideoControls({
           }}
         >
           <MaximizeIcon data-icon="inline-start" />
-          <span className="control-label">全屏</span>
+          <span className="@max-[400px]:hidden">全屏</span>
         </Button>
         {!live && clipSource && (
           <ClipExport

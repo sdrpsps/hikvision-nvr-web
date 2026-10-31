@@ -46,7 +46,7 @@ export function SaveTasksPanel({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         container={fullscreen ?? undefined}
-        className="save-tasks-panel"
+        className="save-tasks-panel max-h-dvh w-[min(28rem,100vw)] max-w-none gap-0 sm:max-w-none"
       >
         <SheetHeader className="pr-12">
           <SheetTitle>录制与下载</SheetTitle>
@@ -55,10 +55,10 @@ export function SaveTasksPanel({
           </SheetDescription>
         </SheetHeader>
         <ScrollArea
-          className="save-tasks-scroll"
+          className="save-tasks-scroll min-h-0 flex-1"
           viewportProps={{ "aria-label": "录制与下载任务列表" }}
         >
-          <div className="save-tasks-content">
+          <div className="save-tasks-content flex flex-col gap-4 px-4 pb-4">
             {tasks.some(active) && (
               <p className="text-xs text-muted-foreground">
                 保存期间请勿关闭或刷新网页，避免电脑休眠。
@@ -74,7 +74,7 @@ export function SaveTasksPanel({
                 </EmptyHeader>
               </Empty>
             )}
-            <ul className="save-task-list">
+            <ul className="save-task-list m-0 flex list-none flex-col gap-3 p-0">
               {ordered.map((task) => (
                 <SaveTaskItem key={task.id} task={task} />
               ))}

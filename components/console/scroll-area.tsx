@@ -15,10 +15,10 @@ export function ConsoleScrollArea({ children }: { children: React.ReactNode }) {
 
   return (
     <ScrollArea
-      className="app-scroll-area"
+      className="app-scroll-area h-dvh w-full"
       viewportProps={{
         ref: viewport,
-        className: "app-scroll-viewport",
+        className: "app-scroll-viewport overflow-x-hidden!",
         "aria-label": "页面内容",
       }}
     >

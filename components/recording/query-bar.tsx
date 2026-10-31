@@ -29,13 +29,16 @@ export function RecordingQueryBar({
   refreshQueries,
 }: QueryBarProps) {
   return (
-    <section className="playback-query-bar" aria-label="检索录像">
+    <section
+      className="playback-query-bar mb-4 flex flex-wrap items-center gap-x-6 gap-y-4 max-[1100px]:gap-x-4 max-[1100px]:gap-y-3 max-md:gap-3"
+      aria-label="检索录像"
+    >
       <ChannelSidebarToggle
         open={sidebarOpen}
         controls="playback-channels"
         onToggle={toggleSidebar}
       />
-      <FieldGroup className="playback-query-fields">
+      <FieldGroup className="flex w-auto flex-row items-center gap-4 max-[1100px]:gap-3 max-md:min-w-0 max-md:flex-1 max-md:flex-wrap [&_[data-slot=field-label]]:whitespace-nowrap [&>[data-slot=field]]:flex [&>[data-slot=field]]:w-auto [&>[data-slot=field]]:flex-row [&>[data-slot=field]]:items-center [&>[data-slot=field]]:gap-2 max-md:[&>[data-slot=field]]:min-w-[8.5rem] max-md:[&>[data-slot=field]]:flex-1 max-md:[&>[data-slot=field]]:flex-col max-md:[&>[data-slot=field]]:items-stretch max-md:[&>[data-slot=field]]:gap-1.5 [&>[data-slot=field]>[data-slot=field-label]]:w-auto [&>[data-slot=field]>[data-slot=field-label]]:flex-none">
         <Field data-invalid={!!date && !validDate} data-disabled={!resources}>
           <FieldLabel htmlFor="date" className="sr-only">
             日期
@@ -51,7 +54,7 @@ export function RecordingQueryBar({
           />
         </Field>
       </FieldGroup>
-      <div className="query-actions">
+      <div className="query-actions ml-auto flex items-center gap-3 max-md:w-full max-md:justify-between">
         <DeviceDetails
           channelCount={resources?.channels.length}
           timeZone={resources?.timeZone}
@@ -62,7 +65,7 @@ export function RecordingQueryBar({
         </Button>
       </div>
       {!!date && !validDate && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="w-full text-sm text-destructive" role="alert">
           请选择有效的日期。
         </p>
       )}

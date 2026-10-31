@@ -41,14 +41,17 @@ export function LiveWindow({
 }: WindowProps) {
   return (
     <section
-      className={cn("live-window", selected === index && "is-selected")}
+      className={cn(
+        "live-window group/window @container relative flex w-full min-w-0 flex-col overflow-hidden rounded-sm border bg-card",
+        selected === index && "border-primary shadow-[0_0_0_1px_var(--primary)]"
+      )}
       aria-label={`窗口 ${index + 1}`}
       onFocusCapture={() => setSelected(index)}
       onPointerDown={() => setSelected(index)}
     >
-      <div className="window-heading live-window-heading">
+      <div className="live-window-heading flex h-[var(--window-heading-height,2.125rem)] shrink-0 items-center gap-1 px-1.5 py-0.5">
         <Button
-          className="window-selector"
+          className="shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           type="button"
           size="xs"
           variant="ghost"
@@ -76,7 +79,7 @@ export function LiveWindow({
           }
         >
           <SelectTrigger
-            className="window-channel"
+            className="min-w-0 flex-1 border-transparent bg-transparent shadow-none"
             size="sm"
             aria-label={`窗口 ${index + 1} 通道`}
           >

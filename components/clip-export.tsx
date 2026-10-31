@@ -82,18 +82,18 @@ export function ClipExport({
           <Button
             variant="ghost"
             size="sm"
-            className="player-control-button"
+            className="player-control-button @max-[400px]:w-7 @max-[400px]:gap-0 @max-[400px]:px-0"
             aria-label="下载片段"
             title="标记所需片段并下载到本机"
           />
         }
       >
         <DownloadIcon data-icon="inline-start" />
-        <span className="control-label">下载片段</span>
+        <span className="@max-[400px]:hidden">下载片段</span>
       </DialogTrigger>
       <DialogContent
         container={portal}
-        className="save-setup-dialog clip-export-panel"
+        className="flex max-h-[calc(100dvh-2rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none flex-col"
       >
         <DialogHeader>
           <DialogTitle>下载录像片段</DialogTitle>
@@ -104,7 +104,7 @@ export function ClipExport({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="clip-export-form"
+          className="flex min-h-0 flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault()
             const range = selection()
@@ -117,8 +117,8 @@ export function ClipExport({
             })
           }}
         >
-          <ScrollArea className="save-setup-scroll">
-            <FieldGroup className="save-setup-content gap-3">
+          <ScrollArea className="flex min-h-0 flex-[0_1_auto] flex-col [&>[data-slot=scroll-area-viewport]]:h-auto [&>[data-slot=scroll-area-viewport]]:min-h-0">
+            <FieldGroup className="gap-3 p-1">
               <SaveCapabilityNotice />
               {(
                 [
@@ -224,7 +224,7 @@ export function ClipExport({
               )}
             </FieldGroup>
           </ScrollArea>
-          <div className="save-setup-actions">
+          <div className="flex shrink-0 justify-end gap-2 border-t pt-3.5">
             <Button
               type="button"
               variant="outline"

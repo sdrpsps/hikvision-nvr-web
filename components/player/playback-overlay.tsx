@@ -25,28 +25,31 @@ export function PlaybackOverlay({
     <>
       {!live && !historyLoading && (
         <Button
-          className="playback-surface-button"
+          className="playback-surface-button group/playback absolute inset-0 size-full rounded-none border-0 bg-transparent p-0 hover:bg-transparent active:translate-none"
           variant="ghost"
           data-paused={paused}
           aria-label={paused ? "播放录像" : "暂停录像"}
           title={paused ? "播放录像" : "暂停录像"}
           onClick={togglePlayback}
         >
-          <span className="playback-center-icon" aria-hidden="true">
+          <span
+            className="flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity duration-100 group-hover/playback:opacity-100 group-focus-visible/playback:opacity-100 group-data-[paused=true]/playback:opacity-100 [&>svg]:size-6"
+            aria-hidden="true"
+          >
             {paused ? <PlayIcon /> : <PauseIcon />}
           </span>
         </Button>
       )}
       {live && !liveStarted && (
         <Empty
-          className="live-startup"
+          className="live-startup pointer-events-none absolute inset-0 rounded-none bg-muted p-2"
           role="status"
           aria-live="polite"
           aria-atomic="true"
         >
           <EmptyHeader>
             <LoaderCircleIcon
-              className="player-loading-icon animate-spin"
+              className="mx-auto size-7 animate-spin text-muted-foreground"
               aria-hidden="true"
             />
             <EmptyTitle>正在缓冲画面</EmptyTitle>
@@ -54,10 +57,13 @@ export function PlaybackOverlay({
         </Empty>
       )}
       {!live && historyLoading && (
-        <Empty className="playback-startup" role="status">
+        <Empty
+          className="playback-startup pointer-events-none absolute inset-0 rounded-none bg-muted p-2"
+          role="status"
+        >
           <EmptyHeader>
             <LoaderCircleIcon
-              className="player-loading-icon animate-spin"
+              className="mx-auto size-7 animate-spin text-muted-foreground"
               aria-hidden="true"
             />
             <EmptyTitle>

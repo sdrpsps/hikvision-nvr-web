@@ -2,6 +2,7 @@
 
 import { useImperativeHandle, useRef, type Ref } from "react"
 import { XIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { HlsVideo } from "@/components/hls-video"
 import { VideoWall } from "@/components/video-wall"
@@ -24,12 +25,15 @@ export function PreviewPlayer(
   } & PlaybackOptions
 ) {
   return (
-    <div className="playback-player">
+    <div className="playback-player mx-auto w-full min-w-0">
       <VideoWall
         count={1}
         label="录像预览窗口"
         renderWindow={() => (
-          <section className="live-window" aria-label="录像回放窗口">
+          <section
+            className="live-window @container relative flex w-full min-w-0 flex-col overflow-hidden rounded-sm border bg-card"
+            aria-label="录像回放窗口"
+          >
             <StreamPlayer {...props} />
           </section>
         )}
@@ -60,7 +64,7 @@ export function StreamPlayer({
   useImperativeHandle(ref, () => ({ start }))
   const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
-    <div className="preview-actions">
+    <div className="preview-actions ml-auto flex shrink-0 items-center gap-1.5">
       {live && session && !error && !expired && (
         <RestartAction
           container={frame}
@@ -72,6 +76,7 @@ export function StreamPlayer({
         <Button
           size="sm"
           variant="outline"
+          className="@max-[400px]:w-7 @max-[400px]:gap-0 @max-[400px]:px-0"
           aria-label={stopLabel}
           title={stopLabel}
           onClick={() => {
@@ -80,14 +85,17 @@ export function StreamPlayer({
           }}
         >
           <XIcon data-icon="inline-start" />
-          <span className="control-label">{stopLabel}</span>
+          <span className="@max-[400px]:hidden">{stopLabel}</span>
         </Button>
       )}
     </div>
   )
   return (
     <section
-      className="stream-player"
+      className={cn(
+        "stream-player @container flex min-w-0 flex-col gap-0",
+        live && "relative aspect-video flex-none"
+      )}
       aria-label={live ? "实时播放器" : "录像预览"}
       data-live={live}
       data-state={
@@ -140,7 +148,15 @@ export function StreamPlayer({
       )}
       {!session && props.timeline}
       {!session && loading && (
-        <div className="preview-control-row">{actions}</div>
+        <div
+          className={cn(
+            "preview-control-row flex min-w-0 items-center justify-between gap-2 px-2.5 py-2",
+            live &&
+              "absolute inset-x-0 bottom-0 bg-card/94 px-1.5 py-1.5 backdrop-blur-md"
+          )}
+        >
+          {actions}
+        </div>
       )}
     </section>
   )

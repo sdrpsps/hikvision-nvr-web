@@ -31,16 +31,18 @@ export function LiveToolbar({
   stopAll,
 }: ToolbarProps) {
   return (
-    <div className="console-toolbar">
-      <div className="console-toolbar-group">
+    <div className="mb-3.5 flex shrink-0 flex-wrap items-center justify-between gap-3 max-md:mb-2.5 max-md:gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <ChannelSidebarToggle
           open={sidebarOpen}
           controls="live-channels"
           onToggle={toggleSidebar}
         />
-        <span className="channel-target">分配到窗口 {selected + 1}</span>
+        <span className="text-xs text-muted-foreground max-md:hidden">
+          分配到窗口 {selected + 1}
+        </span>
       </div>
-      <div className="console-toolbar-group live-toolbar-actions">
+      <div className="flex flex-wrap items-center gap-2">
         <WallLayoutControl value={layout} onChange={setLayout} />
         <Button
           disabled={

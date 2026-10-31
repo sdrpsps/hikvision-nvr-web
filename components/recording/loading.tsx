@@ -6,10 +6,10 @@ export function RecordingLoading({
   label?: string
 }) {
   return (
-    <div className="recording-loading" role="status" aria-label={label}>
+    <div className="min-w-0" role="status" aria-label={label}>
       <span className="sr-only">{label}…</span>
       <div aria-hidden="true" className="flex flex-col gap-4">
-        <Skeleton className="console-loading-picture" />
+        <Skeleton className="aspect-video w-full rounded-md" />
         <div className="flex items-center justify-between gap-4">
           <Skeleton className="h-5 w-28" />
           <Skeleton className="h-8 w-36" />

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { cn } from "@/lib/utils"
 
 export const WALL_LAYOUTS = [1, 2, 4, 8, 16] as const
 export type WallLayout = (typeof WALL_LAYOUTS)[number]
@@ -44,20 +45,25 @@ export function VideoWall({
   count,
   renderWindow,
   label = "视频窗口",
+  className,
 }: {
   count: WallLayout
   renderWindow: (index: number) => ReactNode
   label?: string
+  className?: string
 }) {
   return (
     <div
-      className="video-wall"
+      className={cn(
+        "grid grid-cols-1 gap-2 data-[layout=16]:grid-cols-4 data-[layout=2]:grid-cols-2 data-[layout=4]:grid-cols-2 data-[layout=8]:grid-cols-4 max-md:grid-cols-1!",
+        className
+      )}
       data-layout={count}
       role="group"
       aria-label={label}
     >
       {Array.from({ length: count }, (_, index) => (
-        <div className="video-wall-cell" key={index}>
+        <div className="video-wall-cell min-h-0 min-w-0" key={index}>
           {renderWindow(index)}
         </div>
       ))}

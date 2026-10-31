@@ -28,10 +28,13 @@ export function StreamIdle({
 }: IdleProps) {
   const startLabel = error || expired ? "重试" : live ? "开始预览" : "播放"
   return (
-    <Empty className="stream-idle" aria-busy={loading}>
+    <Empty
+      className="stream-idle [container-type:size] relative aspect-video min-h-0 w-full flex-none bg-muted p-2"
+      aria-busy={loading}
+    >
       {!loading && (
         <Button
-          className="playback-center-button"
+          className="absolute top-1/2 left-1/2 size-14 -translate-1/2 rounded-full [&>svg]:size-6"
           size="icon-lg"
           disabled={!track}
           aria-label={startLabel}
@@ -42,20 +45,35 @@ export function StreamIdle({
         </Button>
       )}
       {(loading || error || expired) && (
-        <EmptyHeader>
+        <EmptyHeader
+          className={
+            !loading
+              ? "absolute top-[calc(50%+2.25rem)] max-w-[calc(100%-1rem)] gap-1.5"
+              : "gap-1.5"
+          }
+        >
           {loading && (
             <LoaderCircleIcon
-              className="player-loading-icon animate-spin"
+              className="mx-auto size-7 animate-spin text-muted-foreground"
               aria-hidden="true"
             />
           )}
-          <EmptyTitle role={loading ? "status" : undefined}>
+          <EmptyTitle
+            className="text-[0.8125rem]"
+            role={loading ? "status" : undefined}
+          >
             {loading ? (live ? "正在连接通道" : "正在准备录像") : "预览未完成"}
           </EmptyTitle>
           {expired && (
-            <EmptyDescription>本次连接已到期，请重试。</EmptyDescription>
+            <EmptyDescription className="text-xs">
+              本次连接已到期，请重试。
+            </EmptyDescription>
           )}
-          {error && <EmptyDescription role="alert">{error}</EmptyDescription>}
+          {error && (
+            <EmptyDescription className="text-xs" role="alert">
+              {error}
+            </EmptyDescription>
+          )}
         </EmptyHeader>
       )}
     </Empty>

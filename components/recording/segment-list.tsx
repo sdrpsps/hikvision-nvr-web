@@ -20,11 +20,10 @@ export function RecordingSegmentList({
   selectSegment,
 }: SegmentListProps) {
   return (
-    <section className="segment-list" aria-label="录像片段列表">
+    <section className="segment-list min-w-0" aria-label="录像片段列表">
       <Button
         type="button"
         variant="ghost"
-        className="segment-list-toggle"
         aria-expanded={listOpen}
         aria-controls="recording-segments"
         onClick={toggleList}
@@ -33,28 +32,30 @@ export function RecordingSegmentList({
         <ChevronDownIcon data-icon="inline-end" aria-hidden="true" />
       </Button>
       {listOpen && (
-        <ol id="recording-segments">
+        <ol
+          id="recording-segments"
+          className="mt-2 overflow-hidden rounded-md border bg-card"
+        >
           {data.segments.map((item, index) => (
-            <li key={item.id}>
+            <li key={item.id} className="[&:last-child>button]:border-b-0">
               <Button
                 type="button"
                 variant={selected === item.id ? "secondary" : "ghost"}
                 aria-label={`选择片段 ${index + 1}，${clock(item.startAt, data.timeZone)} 至 ${segmentEnd(item.endAt, data)}`}
                 aria-pressed={selected === item.id}
                 className={cn(
-                  "segment-row",
-                  selected === item.id && "is-selected"
+                  "segment-row grid h-auto w-full grid-cols-[1.625rem_minmax(0,1fr)_7rem] items-center gap-3.5 rounded-none border-b px-4 py-3 text-left whitespace-normal max-md:grid-cols-[1.25rem_minmax(0,1fr)] max-md:gap-x-2 max-md:gap-y-1 max-md:p-3"
                 )}
                 onClick={() => selectSegment(item.id)}
               >
-                <span className="segment-index">
+                <span className="text-[0.6875rem] text-muted-foreground">
                   {String(index + 1).padStart(2, "0")}
                 </span>
-                <span className="segment-time">
+                <span className="tabular-nums">
                   {clock(item.startAt, data.timeZone)} —{" "}
                   {segmentEnd(item.endAt, data)}
                 </span>
-                <span className="segment-duration">
+                <span className="text-xs text-muted-foreground max-md:col-start-2">
                   {duration(Date.parse(item.endAt) - Date.parse(item.startAt))}
                 </span>
               </Button>

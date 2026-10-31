@@ -48,9 +48,9 @@ export function RecordingTimeline({
     : clock(shownAt, data.timeZone)
   return (
     <>
-      <div className="timeline-toolbar">
-        <div className="distribution-heading">
-          <div className="timeline-current-time">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <div className="flex items-baseline gap-1.5 text-xs tabular-nums [&>span]:text-muted-foreground">
             <span>
               {scrub !== undefined
                 ? "选择时间"
@@ -70,21 +70,21 @@ export function RecordingTimeline({
         {zoomControls}
       </div>
       <ScrollArea
-        className="timeline-scroll-area"
+        className="timeline-scroll-area -mx-2.5 min-w-0"
         scrollbars="horizontal"
         contentProps={{ style: { minWidth: "fit-content" } }}
         viewportProps={{
-          className: "timeline-scroll",
+          className: "px-2.5 pt-1 pb-2.5",
           tabIndex: 0,
           role: "region",
           "aria-label": "全天录像时间轴，可横向滚动",
         }}
       >
         <div
-          className="timeline-chart"
+          className="timeline-chart px-2.5 py-1"
           style={{ minWidth: `${Math.max(640, 760 * zoom)}px` }}
         >
-          <div className="timeline-ticks">
+          <div className="relative h-6 text-[0.6875rem] text-muted-foreground tabular-nums [&>span]:absolute [&>span]:-translate-x-1/2 [&>span]:whitespace-nowrap">
             {ticks.map((offset, index) => (
               <span key={offset} style={{ left: `${(offset / total) * 100}%` }}>
                 {index % 2 === 0 || offset === total
@@ -98,11 +98,11 @@ export function RecordingTimeline({
               </span>
             ))}
           </div>
-          <div className="timeline-track">
+          <div className="relative h-10 rounded-sm border bg-muted">
             {ticks.map((offset) => (
               <span
                 key={offset}
-                className="timeline-gridline"
+                className="absolute h-full w-px bg-border"
                 style={{ left: `${(offset / total) * 100}%` }}
               />
             ))}
@@ -113,8 +113,9 @@ export function RecordingTimeline({
                 <span
                   key={segment.id}
                   className={cn(
-                    "timeline-segment",
-                    selected === segment.id && "is-selected"
+                    "timeline-segment pointer-events-none absolute top-2 bottom-2 min-w-0.5 border-r bg-[var(--recording)]",
+                    selected === segment.id &&
+                      "is-selected selected-segment bg-[var(--recording-selected)]"
                   )}
                   style={{
                     left: `${((a - start) / total) * 100}%`,
@@ -126,7 +127,7 @@ export function RecordingTimeline({
               )
             })}
             <Slider
-              className="recording-timeline-slider"
+              className="absolute inset-0 [&_[data-slot=slider-range]]:bg-transparent [&_[data-slot=slider-thumb]]:h-12 [&_[data-slot=slider-thumb]]:w-1.5 [&_[data-slot=slider-thumb]]:rounded-sm [&_[data-slot=slider-thumb]]:border-0 [&_[data-slot=slider-thumb]]:bg-primary [&_[data-slot=slider-track]]:h-full [&_[data-slot=slider-track]]:rounded-none [&_[data-slot=slider-track]]:bg-transparent [&>div]:h-full"
               aria-label="回放时间轴"
               getAriaValueText={(_formatted, seconds) =>
                 clock(

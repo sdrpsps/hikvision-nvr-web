@@ -40,7 +40,7 @@ export function LiveRecordButton({
   if (task)
     return (
       <Button
-        className="live-record-trigger"
+        className="live-record-trigger min-w-[3.625rem] shrink-0 px-1.5 @max-[12rem]:min-w-7 @max-[12rem]:px-1"
         size="sm"
         variant="destructive"
         aria-label={`停止录制 ${name}`}
@@ -53,7 +53,9 @@ export function LiveRecordButton({
         ) : (
           <SquareIcon data-icon="inline-start" />
         )}
-        <span>{task.state === "stopping" ? "收尾" : "停止"}</span>
+        <span className="@max-[12rem]:hidden">
+          {task.state === "stopping" ? "收尾" : "停止"}
+        </span>
       </Button>
     )
   return (
@@ -73,7 +75,7 @@ export function LiveRecordButton({
       <DialogTrigger
         render={
           <Button
-            className="live-record-trigger"
+            className="live-record-trigger min-w-[3.625rem] shrink-0 px-1.5 @max-[12rem]:min-w-7 @max-[12rem]:px-1"
             variant="ghost"
             size="sm"
             aria-label={`录制 ${name}`}
@@ -83,15 +85,15 @@ export function LiveRecordButton({
         }
       >
         <CircleDotIcon data-icon="inline-start" />
-        <span>录制</span>
+        <span className="@max-[12rem]:hidden">录制</span>
       </DialogTrigger>
-      <DialogContent className="save-setup-dialog">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[min(30rem,calc(100vw-2rem))] max-w-none flex-col">
+        <DialogHeader className="shrink-0 pr-7">
           <DialogTitle>录制 {name}</DialogTitle>
           <DialogDescription>切换通道或页面，录制仍会继续。</DialogDescription>
         </DialogHeader>
-        <ScrollArea className="save-setup-scroll">
-          <div className="save-setup-content">
+        <ScrollArea className="flex min-h-0 flex-[0_1_auto] flex-col [&>[data-slot=scroll-area-viewport]]:h-auto [&>[data-slot=scroll-area-viewport]]:min-h-0">
+          <div className="flex flex-col gap-4 p-1">
             <p className="text-sm font-medium">自动结束时间</p>
             <ToggleGroup
               aria-label="录制自动结束时间"
@@ -119,7 +121,7 @@ export function LiveRecordButton({
             <SaveCapabilityNotice />
           </div>
         </ScrollArea>
-        <div className="save-setup-actions">
+        <div className="flex shrink-0 justify-end gap-2 border-t pt-3.5">
           <Button variant="outline" onClick={() => setOpen(false)}>
             取消
           </Button>

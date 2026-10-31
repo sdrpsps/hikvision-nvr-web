@@ -26,7 +26,10 @@ export function DeviceDetails({
         <InfoIcon data-icon="inline-start" />
         设备信息
       </PopoverTrigger>
-      <PopoverContent align="end" className="device-details">
+      <PopoverContent
+        align="end"
+        className="w-80 max-w-[calc(100vw-2rem)] p-4 [&_[data-slot=popover-title]]:text-xs [&_[data-slot=popover-title]]:font-medium [&_[data-slot=popover-title]]:text-muted-foreground [&_dd]:m-0 [&_dd]:[overflow-wrap:anywhere] [&_dl]:mt-2 [&_dl]:grid [&_dl]:gap-3 [&_dl]:border-t [&_dl]:pt-4 [&_dl]:text-[0.8125rem] [&_dl]:leading-normal [&_dl>div]:grid [&_dl>div]:grid-cols-[3.25rem_minmax(0,1fr)] [&_dl>div]:gap-3 [&_dt]:text-muted-foreground"
+      >
         <PopoverTitle>设备信息</PopoverTitle>
         {open && (
           <DeviceDetailsContent
@@ -54,7 +57,9 @@ function DeviceDetailsContent({
     <>
       {device ? (
         <>
-          <p className="device-model">{device.model}</p>
+          <p className="mt-0.5 text-lg leading-[1.4] font-semibold tracking-[-0.025em] [overflow-wrap:anywhere]">
+            {device.model}
+          </p>
           <dl>
             <div>
               <dt>固件</dt>

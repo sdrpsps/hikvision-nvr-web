@@ -37,12 +37,12 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
     selectSegment,
   } = state
   const distribution = data ? (
-    <RecordingDistribution {...state} data={data} />
+    <RecordingDistribution {...state} data={data} embedded />
   ) : null
 
   return (
     <section
-      className="recording-content"
+      className="recording-content flex min-w-0 flex-col gap-4"
       aria-label="录像查询结果"
       aria-busy={loading || (!resources && !resourceError)}
     >
@@ -71,7 +71,7 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
       {data && (
         <>
           {data.segments.length > 0 ? (
-            <div className="playback-focus">
+            <div className="playback-focus min-w-0">
               {segment ? (
                 <>
                   <PreviewPlayer
@@ -97,10 +97,10 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
                   />
                 </>
               ) : (
-                <div className="playback-player playback-selection">
-                  <Empty className="playback-selection-empty">
+                <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
+                  <Empty className="playback-selection-empty relative aspect-video min-h-0">
                     <Button
-                      className="playback-center-button"
+                      className="absolute top-1/2 left-1/2 size-14 -translate-1/2 rounded-full [&>svg]:size-6"
                       size="icon-lg"
                       aria-label="播放"
                       title="播放"
@@ -114,8 +114,8 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
               )}
             </div>
           ) : (
-            <div className="playback-player playback-selection">
-              <Empty className="playback-selection-empty">
+            <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
+              <Empty className="playback-selection-empty relative aspect-video min-h-0">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <ArchiveIcon />
