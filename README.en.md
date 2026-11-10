@@ -38,6 +38,22 @@ docker run -d --name hikvision-nvr-web --restart unless-stopped \
 
 The default HTTP port is `80`, RTSP port is `554`, and query and display time zone is `Asia/Shanghai`. `NVR_RECORDING_TIME_MODE` defaults to `device-local` for the tested device's timestamp format; use `utc` for firmware using standard UTC timestamps. Other settings are listed in [.env.example](.env.example) and can be passed using additional `-e` options.
 
+### Use Docker Compose
+
+In the project directory, copy the configuration file:
+
+```sh
+cp -n .env.example .env
+```
+
+Edit `.env` and fill in `NVR_HOST`, `NVR_USERNAME` and `NVR_PASSWORD`, then start the container:
+
+```sh
+docker compose up -d
+```
+
+Do not commit or share the populated `.env`. Compose uses the published image and maps port `3000` on the host. See [.env.example](.env.example) for other device settings. After editing `.env`, run `docker compose up -d` again to recreate the container. Run `docker compose down` to stop and remove it.
+
 ### Run from source
 
 The application computer needs Node.js 24, pnpm 11, FFmpeg available on the command line, network access to the NVR, and a device account with viewing permissions. Install FFmpeg on the application server; a separate browser computer does not need it. `ffprobe` is only used for diagnostics.

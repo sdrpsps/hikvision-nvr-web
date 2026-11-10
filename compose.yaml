@@ -1,0 +1,8 @@
+services:
+  hikvision-nvr-web:
+    image: ghcr.io/sdrpsps/hikvision-nvr-web:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env

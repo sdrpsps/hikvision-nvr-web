@@ -40,6 +40,22 @@ docker run -d --name hikvision-nvr-web --restart unless-stopped \
 
 默认 HTTP 端口为 `80`、RTSP 端口为 `554`，查询和显示时区为 `Asia/Shanghai`。`NVR_RECORDING_TIME_MODE` 默认 `device-local`，适配已测试设备的录像时间格式；使用标准 UTC 时间格式的固件可设为 `utc`。其他配置见 [.env.example](.env.example)，可通过添加 `-e` 参数传入。
 
+### 使用 Docker Compose
+
+在项目目录复制配置文件：
+
+```sh
+cp -n .env.example .env
+```
+
+编辑 `.env`，填写 `NVR_HOST`、`NVR_USERNAME` 和 `NVR_PASSWORD`，然后启动：
+
+```sh
+docker compose up -d
+```
+
+不要提交或分享填写过的 `.env`。Compose 使用发布镜像，并映射本机 `3000` 端口；其他设备配置见 [.env.example](.env.example)。修改 `.env` 后重新执行 `docker compose up -d` 以重新创建容器。停止并移除容器可执行 `docker compose down`。
+
 ### 从源码运行
 
 运行应用的电脑需要 Node.js 24、pnpm 11、可在命令行执行的 FFmpeg，以及连接 NVR 的网络和有查看权限的设备账号。FFmpeg 安装在应用服务器上，单独用来访问网页的电脑不需要安装；`ffprobe` 仅用于诊断。
