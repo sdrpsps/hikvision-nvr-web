@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.2](https://github.com/sdrpsps/hikvision-nvr-web/compare/v1.0.1...v1.0.2) (2026-11-23)
+
+
+### Bug Fixes
+
+* playback stability, UI polish, and Next.js update ([d69c4db](https://github.com/sdrpsps/hikvision-nvr-web/commit/d69c4dbad03ba3f77e04ded7f229a695515ecb4c))
+* remove redundant border and radius on playback player ([3e9a7de](https://github.com/sdrpsps/hikvision-nvr-web/commit/3e9a7deded37f696dd3a9b34a8d2960ae8901a43))
+* stabilize active recording lookup, boundary step seek, and fullscreen timeline ([19a4e60](https://github.com/sdrpsps/hikvision-nvr-web/commit/19a4e607185e2aeaacca3028e01d97ace35b28bc))
+
 ## [1.0.1](https://github.com/sdrpsps/hikvision-nvr-web/compare/v1.0.0...v1.0.1) (2026-10-31)
 
 
