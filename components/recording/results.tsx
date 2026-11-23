@@ -72,8 +72,8 @@ function PlaybackStage({
           onStop={stopSequence}
         />
       ) : (
-        <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
-          <Empty className="playback-selection-empty relative aspect-video min-h-0">
+        <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden border-b bg-card">
+          <Empty className="playback-selection-empty relative aspect-video min-h-0 rounded-none">
             <Button
               className="absolute top-1/2 left-1/2 size-14 -translate-1/2 rounded-full [&>svg]:size-6"
               size="icon-lg"
@@ -130,8 +130,8 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
           {data.segments.length > 0 ? (
             <PlaybackStage key={selectionKey} state={state} data={data} />
           ) : (
-            <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
-              <Empty className="playback-selection-empty relative aspect-video min-h-0">
+            <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden bg-card">
+              <Empty className="playback-selection-empty relative aspect-video min-h-0 rounded-none">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <ArchiveIcon />

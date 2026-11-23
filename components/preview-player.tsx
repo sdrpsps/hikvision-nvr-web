@@ -42,7 +42,7 @@ export function PreviewPlayer(
         label="录像预览窗口"
         renderWindow={() => (
           <section
-            className="live-window @container relative flex w-full min-w-0 flex-col overflow-hidden rounded-sm border bg-card"
+            className="live-window @container relative flex w-full min-w-0 flex-col overflow-hidden border-b bg-card"
             aria-label="录像回放窗口"
           >
             <StreamPlayer {...props} />
