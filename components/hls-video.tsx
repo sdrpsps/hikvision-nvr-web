@@ -7,31 +7,29 @@ import {
   type ReactNode,
   type RefObject,
 } from "react"
+import { createPortal } from "react-dom"
 import { toast } from "sonner"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
 import { cn } from "@/lib/utils"
 import type { ClipSource } from "@/components/clip-export"
 import type { PlaybackTimeRequest } from "@/lib/playback-clock"
 import { playbackOffset } from "@/lib/playback-clock"
-import {
-  LiveRecordingIndicator,
-  SaveFullscreenActivity,
-} from "@/components/browser-save-provider"
 import type { PlaybackPreferences } from "./player/types"
 import { usePlaybackPosition } from "./player/use-playback-position"
 import { useHlsMedia } from "./player/use-hls-media"
 import { PlaybackOverlay } from "./player/playback-overlay"
 import { VideoControls } from "./player/video-controls"
-import { useFullscreenControls } from "./player/use-fullscreen-controls"
 
 export type { PlaybackPreferences } from "./player/types"
 
 export function HlsVideo({
   session,
   live = false,
+  liveStarted = false,
   onError,
   actions,
   frame,
+  controlsHost,
   initialPreferences,
   onPreferencesChange,
   onEnded,
@@ -40,13 +38,16 @@ export function HlsVideo({
   liveTrack,
   requestedTime,
   onPlaybackTimeChange,
-  timeline,
+  onStepBoundary,
+  onLiveStarted: notifyLiveStarted,
 }: {
   session: LiveStream | Preview
   live?: boolean
+  liveStarted?: boolean
   onError: (message: string) => void
   actions?: ReactNode
   frame: RefObject<HTMLDivElement | null>
+  controlsHost?: HTMLDivElement | null
   initialPreferences?: PlaybackPreferences
   onPreferencesChange?: (preferences: Partial<PlaybackPreferences>) => void
   onEnded?: () => void
@@ -55,13 +56,16 @@ export function HlsVideo({
   liveTrack?: string
   requestedTime?: PlaybackTimeRequest
   onPlaybackTimeChange?: (at: string | undefined) => void
-  timeline?: ReactNode
+  onStepBoundary?: (deltaSeconds: number, currentAt?: string) => boolean
+  onLiveStarted?: (sessionId: string) => void
 }) {
   const video = useRef<HTMLVideoElement>(null)
-  const controlsHidden = useFullscreenControls(frame)
+  const playing = useRef(false)
   const [paused, setPaused] = useState(true)
-  const [liveStarted, setLiveStarted] = useState(false)
-  const onLiveStarted = useCallback(() => setLiveStarted(true), [])
+  const onLiveStarted = useCallback(
+    () => notifyLiveStarted?.(session.id),
+    [notifyLiveStarted, session.id]
+  )
   const [rate, setRate] = useState(initialPreferences?.rate ?? 1)
   const reportError = useCallback(
     (message: string, operation: string) => {
@@ -94,6 +98,7 @@ export function HlsVideo({
     playbackStatus,
     requestedTime,
     onPlaybackTimeChange,
+    onStepBoundary,
     onError,
     reportError,
   })
@@ -126,20 +131,7 @@ export function HlsVideo({
     } else element.pause()
   }
   return (
-    <div
-      className={cn(
-        "video-surface group/video [container-type:inline-size] relative min-w-0",
-        live
-          ? "size-full"
-          : "fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black",
-        live &&
-          "fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black"
-      )}
-      ref={frame}
-      data-live-starting={live && !liveStarted}
-    >
-      <SaveFullscreenActivity />
-      {live && liveTrack && <LiveRecordingIndicator track={liveTrack} />}
+    <>
       <div
         className={cn(
           "playback-frame relative min-h-0 min-w-0",
@@ -165,20 +157,27 @@ export function HlsVideo({
           preload="auto"
           aria-label={live ? "实时预览画面" : "历史录像预览"}
           onPlay={() => {
+            playing.current = true
             setPaused(false)
           }}
           onPlaying={() => {
+            playing.current = true
             if (!live && seekTarget.current === null) setHistoryReady(true)
           }}
-          onPause={() => setPaused(true)}
+          onPause={(event) => {
+            if (!event.currentTarget.ended) playing.current = false
+            setPaused(true)
+          }}
           onEnded={(event) => {
             if (!event.currentTarget.ended) return
+            const wasPlaying = playing.current
+            playing.current = false
             setPaused(true)
             if (seekTarget.current !== null) {
               applyPendingSeek()
-              return
+              if (seekTarget.current !== null) return
             }
-            onEnded?.()
+            if (wasPlaying) onEnded?.()
           }}
           onTimeUpdate={(event) => {
             if (
@@ -216,39 +215,33 @@ export function HlsVideo({
           togglePlayback={togglePlayback}
         />
       </div>
-      <div
-        inert={controlsHidden}
-        className={cn(
-          "fullscreen-controls contents video-fullscreen:absolute video-fullscreen:inset-x-0 video-fullscreen:bottom-0 video-fullscreen:z-10 video-fullscreen:block video-fullscreen:transition-opacity video-fullscreen:duration-200 motion-reduce:video-fullscreen:transition-none",
-          controlsHidden &&
-            "video-fullscreen:pointer-events-none video-fullscreen:opacity-0"
+      {controlsHost &&
+        createPortal(
+          <VideoControls
+            live={live}
+            videoRef={video}
+            frame={frame}
+            pendingSeek={historyLoading ? pendingSeek : null}
+            cancelSeek={cancelSeek}
+            rate={rate}
+            setRate={setRate}
+            sound={sound}
+            toggleSound={toggleSound}
+            position={position + fileOffset}
+            totalDuration={fileDuration}
+            clipSource={
+              clipSource
+                ? { ...clipSource, fileStartAt: recording?.fileRange?.startAt }
+                : undefined
+            }
+            actions={actions}
+            onPreferencesChange={onPreferencesChange}
+            reportError={reportError}
+            stepSeek={stepSeek}
+            initialStepSeconds={initialPreferences?.stepSeconds}
+          />,
+          controlsHost
         )}
-      >
-        {timeline}
-        <VideoControls
-          live={live}
-          videoRef={video}
-          frame={frame}
-          pendingSeek={historyLoading ? pendingSeek : null}
-          cancelSeek={cancelSeek}
-          rate={rate}
-          setRate={setRate}
-          sound={sound}
-          toggleSound={toggleSound}
-          position={position + fileOffset}
-          totalDuration={fileDuration}
-          clipSource={
-            clipSource
-              ? { ...clipSource, fileStartAt: recording?.fileRange?.startAt }
-              : undefined
-          }
-          actions={actions}
-          onPreferencesChange={onPreferencesChange}
-          reportError={reportError}
-          stepSeek={stepSeek}
-          initialStepSeconds={initialPreferences?.stepSeconds}
-        />
-      </div>
-    </div>
+    </>
   )
 }

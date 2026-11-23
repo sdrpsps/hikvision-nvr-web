@@ -1,7 +1,9 @@
 "use client"
 
+import { useRef } from "react"
 import { ArchiveIcon, PlayIcon } from "lucide-react"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
+import type { Recordings } from "@/shared/contracts"
 import { PreviewPlayer } from "@/components/preview-player"
 import { Button } from "@/components/ui/button"
 import { RecordingLoading } from "./loading"
@@ -15,15 +17,17 @@ import {
 import { RecordingDistribution } from "./distribution"
 import { RecordingSegmentList } from "./segment-list"
 
-export function RecordingResults({ state }: { state: RecordingConsoleState }) {
+function PlaybackStage({
+  state,
+  data,
+}: {
+  state: RecordingConsoleState
+  data: Recordings
+}) {
+  const scrollLeftRef = useRef(0)
   const {
     resources,
-    resourceError,
-    error,
-    loading,
-    data,
     segment,
-    selectionKey,
     track,
     date,
     requestedTime,
@@ -35,8 +39,61 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
     nextSegment,
     stopSequence,
     selectSegment,
+    stepBoundary,
   } = state
-  const distribution = data ? (
+  const distribution = (
+    <RecordingDistribution
+      {...state}
+      data={data}
+      embedded
+      scrollLeftRef={scrollLeftRef}
+    />
+  )
+  return (
+    <div className="playback-focus min-w-0">
+      {segment ? (
+        <PreviewPlayer
+          track={track}
+          date={date}
+          segmentId={segment.id}
+          timeZone={data.timeZone}
+          requestedTime={requestedTime}
+          onPlaybackTimeChange={updatePlaybackTime}
+          onStepBoundary={stepBoundary}
+          onActivityChange={updatePlaybackActivity}
+          timeline={distribution}
+          channelName={
+            resources?.channels.find((channel) => channel.id === track)?.name
+          }
+          autoStart={automatic === segment.id}
+          initialPreferences={preferences}
+          onPreferencesChange={updatePreferences}
+          onPlaybackEnded={nextSegment}
+          onStop={stopSequence}
+        />
+      ) : (
+        <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden border-b bg-card">
+          <Empty className="playback-selection-empty relative aspect-video min-h-0 rounded-none">
+            <Button
+              className="absolute top-1/2 left-1/2 size-14 -translate-1/2 rounded-full [&>svg]:size-6"
+              size="icon-lg"
+              aria-label="播放"
+              title="播放"
+              onClick={() => selectSegment(data.segments[0].id)}
+            >
+              <PlayIcon />
+            </Button>
+          </Empty>
+          {distribution}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function RecordingResults({ state }: { state: RecordingConsoleState }) {
+  const { resources, resourceError, error, loading, data, selectionKey } = state
+  const emptyDistribution = data ? (
     <RecordingDistribution {...state} data={data} embedded />
   ) : null
 
@@ -71,51 +128,10 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
       {data && (
         <>
           {data.segments.length > 0 ? (
-            <div className="playback-focus min-w-0">
-              {segment ? (
-                <>
-                  <PreviewPlayer
-                    key={`${selectionKey}|${segment.id}`}
-                    track={track}
-                    date={date}
-                    segmentId={segment.id}
-                    timeZone={data.timeZone}
-                    requestedTime={requestedTime}
-                    onPlaybackTimeChange={updatePlaybackTime}
-                    onActivityChange={updatePlaybackActivity}
-                    timeline={distribution}
-                    channelName={
-                      resources?.channels.find(
-                        (channel) => channel.id === track
-                      )?.name
-                    }
-                    autoStart={automatic === segment.id}
-                    initialPreferences={preferences}
-                    onPreferencesChange={updatePreferences}
-                    onPlaybackEnded={nextSegment}
-                    onStop={stopSequence}
-                  />
-                </>
-              ) : (
-                <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
-                  <Empty className="playback-selection-empty relative aspect-video min-h-0">
-                    <Button
-                      className="absolute top-1/2 left-1/2 size-14 -translate-1/2 rounded-full [&>svg]:size-6"
-                      size="icon-lg"
-                      aria-label="播放"
-                      title="播放"
-                      onClick={() => selectSegment(data.segments[0].id)}
-                    >
-                      <PlayIcon />
-                    </Button>
-                  </Empty>
-                  {distribution}
-                </div>
-              )}
-            </div>
+            <PlaybackStage key={selectionKey} state={state} data={data} />
           ) : (
-            <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden rounded-sm border bg-card">
-              <Empty className="playback-selection-empty relative aspect-video min-h-0">
+            <div className="playback-player playback-selection mx-auto w-full min-w-0 overflow-hidden bg-card">
+              <Empty className="playback-selection-empty relative aspect-video min-h-0 rounded-none">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <ArchiveIcon />
@@ -124,7 +140,7 @@ export function RecordingResults({ state }: { state: RecordingConsoleState }) {
                   <EmptyDescription>试试其他日期或摄像头。</EmptyDescription>
                 </EmptyHeader>
               </Empty>
-              {distribution}
+              {emptyDistribution}
             </div>
           )}
           {data.segments.length > 0 && (

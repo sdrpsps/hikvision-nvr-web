@@ -1,9 +1,11 @@
 "use client"
 
 import { useCallback, useEffect, useId, useRef, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { flushSync } from "react-dom"
 import { toast } from "sonner"
 import type { Preview, LiveStream } from "@/shared/contracts"
+import { extendRecordingCache } from "@/lib/api-queries"
 import {
   useCreateLiveStream,
   useCreatePlaybackStream,
@@ -16,6 +18,7 @@ import type { StreamSource, PlaybackOptions } from "./types"
 // Keep their controllers private so they cannot be released or restarted apart.
 export function useStreamSession(props: StreamSource & PlaybackOptions) {
   const { track, live = false } = props
+  const queryClient = useQueryClient()
   const { mutateAsync: createLive } = useCreateLiveStream()
   const { mutateAsync: createPlayback } = useCreatePlaybackStream()
   const { mutateAsync: release } = useDeleteStream()
@@ -30,21 +33,26 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     restartRequested?: boolean
   } | null>(null)
   const lastStartRequest = useRef<number | undefined>(undefined)
-  const automaticallyStarted = useRef(false)
+  const automaticallyStarted = useRef<string | undefined>(undefined)
+  const activeSegment = useRef<string | undefined>(undefined)
   const callbacks = useRef(props)
   useEffect(() => {
     callbacks.current = props
   })
   const [session, setSession] = useState<Preview | LiveStream>()
   const [sessionRevision, setSessionRevision] = useState<number>()
+  const [sessionSegment, setSessionSegment] = useState<string>()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [expired, setExpired] = useState(false)
+  const sourceSegment = props.live ? undefined : props.segmentId
   const requestedRevision = props.requestedTime?.revision
   const serverSeek =
     !!session && "source" in session && session.source === "shttp"
-  // A server-side seek owns a new media clock, not a seek on the old source.
-  const replacingPlayback = serverSeek && sessionRevision !== requestedRevision
+  const segmentChanged = !live && !!session && sessionSegment !== sourceSegment
+  // A server-side seek or segment change owns a new media clock, not a seek on the old source.
+  const replacingPlayback =
+    (serverSeek && sessionRevision !== requestedRevision) || segmentChanged
   const notifyError = useCallback(
     (message: string) => {
       toast.error(message, {
@@ -77,7 +85,9 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       if (activeId.current && activeId.current !== releasingId)
         void release(activeId.current)
       activeId.current = null
+      activeSegment.current = undefined
       setSession(undefined)
+      setSessionSegment(undefined)
       callbacks.current.onPlaybackTimeChange?.(undefined)
       callbacks.current.onStop?.()
     },
@@ -102,6 +112,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       if (activeId.current && activeId.current !== releasingId)
         void release(activeId.current)
       activeId.current = null
+      activeSegment.current = undefined
     }
     window.addEventListener("pagehide", cleanup)
     return () => {
@@ -119,8 +130,10 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
           if (releasingPlayback.current?.id !== session.id)
             void release(session.id)
           activeId.current = null
+          activeSegment.current = undefined
         }
         setSession(undefined)
+        setSessionSegment(undefined)
         callbacks.current.onPlaybackTimeChange?.(undefined)
         callbacks.current.onStop?.()
       },
@@ -150,8 +163,10 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         })
       }
       activeId.current = null
+      activeSegment.current = undefined
       failed.current = false
       setSession(undefined)
+      setSessionSegment(undefined)
       callbacks.current.onPlaybackTimeChange?.(undefined)
       setLoading(false)
       setExpired(false)
@@ -159,8 +174,6 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     },
     [release, feedbackId, track]
   )
-  const sourceDate = props.live ? undefined : props.date
-  const sourceSegment = props.live ? undefined : props.segmentId
   const prepare = useCallback(async () => {
     if (!live && serverSeek && activeId.current) {
       ending.current?.abort()
@@ -170,6 +183,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         pending.restartRequested = true
         pending.restartRevision = callbacks.current.requestedTime?.revision
         setSession(undefined)
+        setSessionSegment(undefined)
         setLoading(true)
         callbacks.current.onPlaybackTimeChange?.(undefined)
         return
@@ -177,6 +191,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       const handoff = { id: activeId.current }
       releasingPlayback.current = handoff
       setSession(undefined)
+      setSessionSegment(undefined)
       setLoading(true)
       callbacks.current.onPlaybackTimeChange?.(undefined)
       const released = await release(handoff.id)
@@ -189,9 +204,13 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       }
       if (activeId.current !== handoff.id) return
       activeId.current = null
+      activeSegment.current = undefined
     }
     close()
-    const target = callbacks.current.requestedTime
+    const current = callbacks.current
+    const target = current.requestedTime
+    const targetDate = current.live ? undefined : current.date
+    const targetSegment = current.live ? undefined : current.segmentId
     const controller = new AbortController()
     request.current = controller
     setLoading(true)
@@ -200,15 +219,18 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         ? await createLive({ track, signal: controller.signal })
         : await createPlayback({
             track,
-            date: sourceDate!,
-            segmentId: sourceSegment!,
+            date: targetDate!,
+            segmentId: targetSegment!,
             at: target?.at,
             signal: controller.signal,
           })
+      const latest = callbacks.current
       if (
         controller.signal.aborted ||
-        (!live &&
-          target?.revision !== callbacks.current.requestedTime?.revision)
+        (!latest.live &&
+          (target?.revision !== latest.requestedTime?.revision ||
+            targetDate !== latest.date ||
+            targetSegment !== latest.segmentId))
       ) {
         void release(session.id)
         return
@@ -223,8 +245,24 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
           "无法确认录像文件的起始时间，暂不能定位到所选时间。请刷新后重试。"
         )
       }
+      if (
+        !live &&
+        targetDate &&
+        targetSegment &&
+        "fileRange" in session &&
+        session.fileRange
+      ) {
+        extendRecordingCache(
+          queryClient,
+          { track, date: targetDate },
+          targetSegment,
+          session.fileRange
+        )
+      }
       activeId.current = session.id
+      activeSegment.current = targetSegment
       setSessionRevision(target?.revision)
+      setSessionSegment(targetSegment)
       setSession(session)
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -247,11 +285,10 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
     createLive,
     createPlayback,
     release,
+    queryClient,
     live,
     serverSeek,
     track,
-    sourceDate,
-    sourceSegment,
     onError,
   ])
   useEffect(() => {
@@ -262,10 +299,11 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       const requested =
         requestedRevision !== undefined &&
         requestedRevision !== lastStartRequest.current
-      const automatic = props.autoStart && !automaticallyStarted.current
+      const automatic =
+        props.autoStart && automaticallyStarted.current !== sourceSegment
       if (!requested && !automatic) return
       if (requested) lastStartRequest.current = requestedRevision
-      if (props.autoStart) automaticallyStarted.current = true
+      automaticallyStarted.current = props.autoStart ? sourceSegment : undefined
       if (requested) {
         ending.current?.abort()
         ending.current = null
@@ -274,6 +312,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
         if (releasingPlayback.current) {
           releasingPlayback.current.restartRevision = requestedRevision
           setSession(undefined)
+          setSessionSegment(undefined)
           setLoading(true)
           return
         }
@@ -282,12 +321,19 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
           void prepare()
           return
         }
-        if (serverSeek && activeId.current) {
+        if (
+          (serverSeek || activeSegment.current !== sourceSegment) &&
+          activeId.current
+        ) {
           void prepare()
           return
         }
       }
-      if (!activeId.current && !request.current) void prepare()
+      if (
+        (!activeId.current || activeSegment.current !== sourceSegment) &&
+        !request.current
+      )
+        void prepare()
     })
     return () => {
       cancelled = true
@@ -295,6 +341,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
   }, [
     props.autoStart,
     requestedRevision,
+    sourceSegment,
     live,
     serverSeek,
     prepare,
@@ -333,6 +380,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       // Stop media and status requests before DELETE invalidates the session.
       flushSync(() => {
         setSession(undefined)
+        setSessionSegment(undefined)
         setLoading(true)
       })
       const released = await release(id)
@@ -349,6 +397,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
           return
         }
         activeId.current = null
+        activeSegment.current = undefined
         void prepare()
         return
       }
@@ -356,6 +405,7 @@ export function useStreamSession(props: StreamSource & PlaybackOptions) {
       setLoading(false)
       if (!released) throw new Error("无法关闭上一段录像，请重试。")
       activeId.current = null
+      activeSegment.current = undefined
       callbacks.current.onPlaybackEnded?.()
     } catch (error) {
       if (!controller.signal.aborted)

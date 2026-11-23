@@ -1,10 +1,12 @@
 "use client"
 
+import { useRef } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   apiKeys,
   channelsQueryOptions,
   deviceQueryOptions,
+  fetchFreshRecordings,
   recordingsQueryOptions,
   type RecordingsParams,
 } from "@/lib/api-queries"
@@ -25,7 +27,23 @@ export function useDevice({ enabled = true }: { enabled?: boolean } = {}) {
 }
 
 export function useRecordings(params: RecordingsParams) {
-  return useQuery(recordingsQueryOptions(params))
+  const forceFresh = useRef(false)
+  const options = recordingsQueryOptions(params)
+  const query = useQuery({
+    ...options,
+    queryFn: (context) => {
+      const fresh = forceFresh.current
+      forceFresh.current = false
+      return fresh
+        ? fetchFreshRecordings(params, context.signal)
+        : options.queryFn!(context)
+    },
+  })
+  const refresh = () => {
+    forceFresh.current = true
+    return query.refetch()
+  }
+  return { ...query, refresh }
 }
 
 export function useRenameChannel() {

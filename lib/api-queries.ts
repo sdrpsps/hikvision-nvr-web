@@ -1,9 +1,10 @@
-import { queryOptions } from "@tanstack/react-query"
+import { queryOptions, type QueryClient } from "@tanstack/react-query"
 import {
   channelsSchema,
   deviceSchema,
   recordingsQuerySchema,
   recordingsSchema,
+  type Recordings,
 } from "../shared/contracts"
 import { requestJson } from "./api"
 
@@ -49,12 +50,64 @@ export function recordingsQueryOptions(params: RecordingsParams) {
     queryFn: ({ signal }) => {
       const query = recordingsQuerySchema.parse(params)
       return requestJson(
-        `/api/recordings?${new URLSearchParams(query)}`,
+        `/api/recordings?${new URLSearchParams({ track: query.track, date: query.date })}`,
         recordingsSchema,
         { signal }
       )
     },
     enabled: recordingsQuerySchema.safeParse(params).success,
     staleTime: 0,
+  })
+}
+
+export function fetchFreshRecordings(
+  params: RecordingsParams,
+  signal?: AbortSignal
+) {
+  const query = recordingsQuerySchema.parse(params)
+  return requestJson(
+    `/api/recordings?${new URLSearchParams({
+      track: query.track,
+      date: query.date,
+      fresh: "1",
+    })}`,
+    recordingsSchema,
+    { signal }
+  )
+}
+
+export function extendRecordingCache(
+  queryClient: QueryClient,
+  params: RecordingsParams,
+  segmentId: string,
+  fileRange: { startAt: string; endAt: string }
+) {
+  queryClient.setQueryData<Recordings>(apiKeys.recordings(params), (old) => {
+    if (!old) return old
+    const index = old.segments.findIndex((item) => item.id === segmentId)
+    if (index < 0) return old
+    if (Date.parse(fileRange.startAt) > Date.parse(old.segments[index].endAt))
+      return old
+    const clampedEnd = Math.min(
+      Date.parse(fileRange.endAt),
+      Date.parse(old.range.endAt)
+    )
+    if (
+      !Number.isFinite(clampedEnd) ||
+      clampedEnd <= Date.parse(old.segments[index].endAt)
+    )
+      return old
+    const nextEnd = new Date(clampedEnd).toISOString()
+    const segments = old.segments.map((item, i) =>
+      i === index ? { ...item, endAt: nextEnd } : item
+    )
+    const coverage = old.coverage.map((item, i) =>
+      i === old.coverage.length - 1 &&
+      Date.parse(item.endAt) < clampedEnd &&
+      Date.parse(item.endAt) >= Date.parse(old.segments[index].startAt)
+        ? { ...item, endAt: nextEnd }
+        : item
+    )
+    return { ...old, segments, coverage }
   })
 }

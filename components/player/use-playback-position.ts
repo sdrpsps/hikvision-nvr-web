@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import type { LiveStream, Preview, PlaybackStatus } from "@/shared/contracts"
 import {
+  formatMediaClock,
+  isTargetSeekable,
   playbackInstant,
   playbackOffset,
+  resolveSeekEnd,
+  snapToSeekable,
   type PlaybackTimeRequest,
 } from "@/lib/playback-clock"
 
@@ -15,6 +19,7 @@ type PositionOptions = {
   playbackStatus?: PlaybackStatus
   requestedTime?: PlaybackTimeRequest
   onPlaybackTimeChange?: (at: string | undefined) => void
+  onStepBoundary?: (deltaSeconds: number, currentAt?: string) => boolean
   onError: (message: string) => void
   reportError: (message: string, operation: string) => void
 }
@@ -26,6 +31,7 @@ export function usePlaybackPosition({
   playbackStatus,
   requestedTime,
   onPlaybackTimeChange,
+  onStepBoundary,
   onError,
   reportError,
 }: PositionOptions) {
@@ -50,6 +56,7 @@ export function usePlaybackPosition({
   const seekTarget = useRef<number | null>(
     initialOffset > 0 ? initialOffset : null
   )
+  const appliedTarget = useRef<number | null>(null)
   const totalDuration = playbackStatus?.complete
     ? (playbackStatus.totalDurationSeconds ?? playbackStatus.durationSeconds)
     : recorded?.totalDurationSeconds
@@ -76,22 +83,23 @@ export function usePlaybackPosition({
     initialSeek.current = false
     resumeAfterSeek.current = false
     seekTarget.current = null
+    appliedTarget.current = null
     setPendingSeek(null)
     if (videoRef.current) publishPosition(videoRef.current.currentTime)
   }
   const finishSeek = useCallback(() => {
     const element = videoRef.current,
       target = seekTarget.current
-    if (
-      !element ||
-      target === null ||
-      element.seeking ||
-      Math.abs(element.currentTime - target) > 0.05 ||
-      element.readyState < 2
-    )
-      return
+    if (!element || target === null || element.seeking) return
+    if (!element.ended && element.readyState < 2) return
+    const delta = Math.abs(element.currentTime - target)
+    const settled =
+      delta <= 0.05 ||
+      (appliedTarget.current === target && (delta <= 0.25 || element.ended))
+    if (!settled) return
     initialSeek.current = false
     seekTarget.current = null
+    appliedTarget.current = null
     setPendingSeek(null)
     setHistoryReady(true)
     publishPosition(element.currentTime)
@@ -112,33 +120,31 @@ export function usePlaybackPosition({
         return
       }
       seekTarget.current = null
+      appliedTarget.current = null
       setPendingSeek(null)
       publishPosition(element.currentTime)
       reportError(
-        `目标超出录像范围，文件总时长为 ${mediaTime(totalDuration)}。`,
+        `目标超出录像范围，文件总时长为 ${formatMediaClock(totalDuration)}。`,
         "seek"
       )
       return
     }
-    if (
-      Number.isNaN(element.duration) ||
-      (Number.isFinite(element.duration) && target > element.duration)
-    )
-      return
-    let seekable = false
-    for (let index = 0; index < element.seekable.length; index++)
-      if (
-        target >= element.seekable.start(index) &&
-        target <= element.seekable.end(index)
-      )
-        seekable = true
-    if (!seekable) return
+    if (!isTargetSeekable(element, target)) return
     try {
-      if (!element.seeking && Math.abs(element.currentTime - target) > 0.05)
+      const delta = Math.abs(element.currentTime - target)
+      const shouldAssign =
+        !element.seeking &&
+        (appliedTarget.current !== target
+          ? delta > 0.001
+          : delta > 0.25 && !element.ended)
+      if (shouldAssign) {
+        appliedTarget.current = target
         element.currentTime = target
+      }
       finishSeek()
     } catch {
       seekTarget.current = null
+      appliedTarget.current = null
       setPendingSeek(null)
       reportError("暂时无法跳转，请稍后重试。", "seek")
     }
@@ -160,6 +166,7 @@ export function usePlaybackPosition({
       }
       setSeekMode(mode)
       seekTarget.current = seconds
+      appliedTarget.current = null
       setPendingSeek(seconds)
       applyPendingSeek()
     },
@@ -177,33 +184,54 @@ export function usePlaybackPosition({
       )
         return
       const current = seekTarget.current ?? element.currentTime
-      const end = totalDuration ?? element.duration
-      const target = Math.max(
+      const end = resolveSeekEnd(
+        element.seekable,
+        totalDuration,
+        element.duration,
+        playbackStatus?.complete
+      )
+      const currentInstant = mediaStart
+        ? playbackInstant(mediaStart, current)
+        : undefined
+      if (
+        ((delta < 0 && current <= 0.05) ||
+          (delta > 0 && Number.isFinite(end) && current >= end - 0.05)) &&
+        onStepBoundary?.(delta, currentInstant)
+      )
+        return
+      const clamped = Math.max(
         0,
         Math.min(
           current + delta,
           Number.isFinite(end) ? Math.max(0, end - 0.001) : Infinity
         )
       )
-      if (Math.abs(target - current) < 0.001) return
-      let available = false
-      for (let index = 0; index < element.seekable.length; index++) {
-        if (
-          target >= element.seekable.start(index) &&
-          target <= element.seekable.end(index)
-        )
-          available = true
-      }
-      if (!available) {
+      const snapped = snapToSeekable(
+        element.seekable,
+        clamped,
+        playbackStatus?.complete
+      )
+      if (snapped === undefined) {
         reportError(
           "目标超出当前可定位范围，请等待录像读取或使用时间轴定位。",
           "step"
         )
         return
       }
-      requestSeek(target, "step")
+      if (Math.abs(snapped - current) < 0.001) return
+      requestSeek(snapped, "step")
     },
-    [historyReady, live, reportError, requestSeek, totalDuration, videoRef]
+    [
+      historyReady,
+      live,
+      mediaStart,
+      onStepBoundary,
+      playbackStatus?.complete,
+      reportError,
+      requestSeek,
+      totalDuration,
+      videoRef,
+    ]
   )
   useEffect(() => {
     if (serverSeek) return
@@ -249,13 +277,4 @@ export function usePlaybackPosition({
     applyPendingSeek,
     stepSeek,
   }
-}
-
-function mediaTime(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds))
-  const minutes = Math.floor(total / 60)
-  const clock = `${String(minutes % 60).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`
-  return minutes >= 60
-    ? `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${clock}`
-    : clock
 }

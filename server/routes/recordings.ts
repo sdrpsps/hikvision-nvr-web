@@ -19,7 +19,9 @@ export function createRecordingRoutes(getService: () => NvrService) {
       )
     return c.json(
       recordingsSchema.parse(
-        await getService().recordings(parsed.data.track, parsed.data.date)
+        await getService().recordings(parsed.data.track, parsed.data.date, {
+          fresh: parsed.data.fresh === "1",
+        })
       )
     )
   })

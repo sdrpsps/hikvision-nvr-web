@@ -18,6 +18,7 @@ export const dateSchema = z.iso.date()
 export const recordingsQuerySchema = z.strictObject({
   track: trackIdSchema,
   date: dateSchema,
+  fresh: z.literal("1").optional(),
 })
 export const errorSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }),
@@ -60,12 +61,24 @@ export type Channel = z.infer<typeof channelSchema>
 export type Recordings = z.infer<typeof recordingsSchema>
 export type Interval = z.infer<typeof intervalSchema>
 
-export const historyTransferRequestSchema = recordingsQuerySchema.extend({
-  segmentId: z.string().regex(/^[a-f0-9]{32}$/),
-})
-export const previewRequestSchema = historyTransferRequestSchema.extend({
-  at: z.iso.datetime().optional(),
-})
+export const historyTransferRequestSchema = recordingsQuerySchema
+  .omit({ fresh: true })
+  .extend({
+    segmentId: z.string().regex(/^[a-f0-9]{32}$/),
+  })
+export const previewRequestSchema = recordingsQuerySchema
+  .omit({ fresh: true })
+  .extend({
+    segmentId: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/)
+      .optional(),
+    at: z.iso.datetime().optional(),
+  })
+  .refine(
+    (value) => value.segmentId !== undefined || value.at !== undefined,
+    "请提供录像 ID 或回放时间。"
+  )
 export const previewSchema = z.object({
   fileRange: intervalSchema.optional(),
   mediaStartAt: z.iso.datetime().optional(),

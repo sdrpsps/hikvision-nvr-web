@@ -118,6 +118,17 @@ export function VideoControls({
             <span className="@max-[400px]:hidden">声音</span>
           </Label>
         </div>
+        {!live && clipSource && (
+          <ClipExport
+            source={clipSource}
+            position={position}
+            duration={totalDuration}
+            container={frame}
+          />
+        )}
+      </div>
+      <div className="preview-actions ml-auto flex shrink-0 items-center gap-1.5">
+        {actions}
         <Button
           variant="ghost"
           size="sm"
@@ -137,16 +148,7 @@ export function VideoControls({
           <MaximizeIcon data-icon="inline-start" />
           <span className="@max-[400px]:hidden">全屏</span>
         </Button>
-        {!live && clipSource && (
-          <ClipExport
-            source={clipSource}
-            position={position}
-            duration={totalDuration}
-            container={frame}
-          />
-        )}
       </div>
-      {actions}
     </div>
   )
 }

@@ -1,8 +1,16 @@
 "use client"
 
-import { useEffect, useMemo, useState, type RefObject } from "react"
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import { ClockIcon } from "lucide-react"
 import { Temporal } from "@js-temporal/polyfill"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Popover,
@@ -21,8 +29,15 @@ export function RecordingTimePicker({
   min,
   max,
   invalid,
+  disabled,
   container,
+  triggerText,
+  title,
+  size,
+  className,
+  onOpenChange,
   onChange,
+  onCommit,
 }: {
   id: string
   label: string
@@ -31,10 +46,19 @@ export function RecordingTimePicker({
   min: string
   max: string
   invalid?: boolean
+  disabled?: boolean
   container?: RefObject<HTMLDivElement | null>
-  onChange: (value: string) => void
+  triggerText?: ReactNode
+  title?: string
+  size?: ComponentProps<typeof Button>["size"]
+  className?: string
+  onOpenChange?: (open: boolean) => void
+  onChange?: (value: string) => void
+  onCommit?: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<string>()
+  const [fullscreen, setFullscreen] = useState<HTMLElement | null>(null)
   const [reducedMotion, setReducedMotion] = useState(false)
   useEffect(() => {
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -43,16 +67,29 @@ export function RecordingTimePicker({
     preference.addEventListener("change", update)
     return () => preference.removeEventListener("change", update)
   }, [])
-  const time = recordingTimeOfDay(value, date)
+  useEffect(() => {
+    if (container) return
+    const update = () =>
+      setFullscreen(
+        document.fullscreenElement instanceof HTMLElement
+          ? document.fullscreenElement
+          : null
+      )
+    update()
+    document.addEventListener("fullscreenchange", update)
+    return () => document.removeEventListener("fullscreenchange", update)
+  }, [container])
+  const activeValue = open && !onChange && draft !== undefined ? draft : value
+  const time = recordingTimeOfDay(activeValue, date)
   const lowerBound = recordingTimeOfDay(min, date)
   const upperBound = recordingTimeOfDay(max, date)
   const parts = time.split(":")
   // Stable options keep playback time updates from resetting an active gesture.
   const columns = useMemo(() => {
-    const time = recordingTimeOfDay(value, date)
+    const current = recordingTimeOfDay(activeValue, date)
     const lowerBound = recordingTimeOfDay(min, date)
     const upperBound = recordingTimeOfDay(max, date)
-    const values = time.split(":")
+    const values = current.split(":")
     return ["时", "分", "秒"].map((unit, index) => ({
       unit,
       options: Array.from(
@@ -70,35 +107,60 @@ export function RecordingTimePicker({
         }
       ),
     }))
-  }, [value, min, max, date])
-  function change(next: string) {
+  }, [activeValue, min, max, date])
+  function formatClockValue(clockTime: string) {
     const selected =
-      next < lowerBound ? lowerBound : next > upperBound ? upperBound : next
-    onChange(
-      selected === "24:00:00"
-        ? `${Temporal.PlainDate.from(date).add({ days: 1 })} 00:00:00`
-        : `${date} ${selected}`
-    )
+      clockTime < lowerBound
+        ? lowerBound
+        : clockTime > upperBound
+          ? upperBound
+          : clockTime
+    return selected === "24:00:00"
+      ? `${Temporal.PlainDate.from(date).add({ days: 1 })} 00:00:00`
+      : `${date} ${selected}`
   }
+  function change(next: string) {
+    const formatted = formatClockValue(next)
+    if (open) setDraft(formatted)
+    onChange?.(formatted)
+  }
+  const portalContainer = container ?? fullscreen ?? undefined
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen)
+        setDraft(
+          nextOpen
+            ? formatClockValue(recordingTimeOfDay(value, date) || lowerBound)
+            : undefined
+        )
+        onOpenChange?.(nextOpen)
+      }}
+    >
       <PopoverTrigger
         render={
           <Button
             id={id}
             type="button"
             variant="outline"
-            className="min-w-0 flex-1 justify-start"
+            size={size}
+            className={cn("min-w-0 flex-1 justify-start", className)}
             aria-label={label}
+            title={title}
             aria-invalid={invalid}
-            disabled={!min || !max}
+            disabled={disabled || !min || !max}
           />
         }
       >
         <ClockIcon data-icon="inline-start" />
-        {time || "选择时间"}
+        {triggerText ?? (time || "选择时间")}
       </PopoverTrigger>
-      <PopoverContent container={container} align="start" className="w-64">
+      <PopoverContent
+        container={portalContainer}
+        align="start"
+        className="w-64"
+      >
         <PopoverTitle>选择{label}</PopoverTitle>
         <WheelPickerWrapper>
           {columns.map(({ unit, options }, index) => (
@@ -123,7 +185,15 @@ export function RecordingTimePicker({
             />
           ))}
         </WheelPickerWrapper>
-        <Button type="button" onClick={() => setOpen(false)}>
+        <Button
+          type="button"
+          onClick={() => {
+            const committed = draft ?? value
+            setOpen(false)
+            setDraft(undefined)
+            onCommit?.(committed)
+          }}
+        >
           完成时间选择
         </Button>
       </PopoverContent>

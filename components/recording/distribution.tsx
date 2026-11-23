@@ -1,5 +1,6 @@
 "use client"
 
+import type { RefObject } from "react"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { RecordingConsoleState } from "@/hooks/use-recording-console"
 import type { Recordings } from "@/shared/contracts"
@@ -17,7 +18,12 @@ type DistributionProps = Pick<
   | "setZoom"
   | "selectSegment"
   | "dataUpdatedAt"
-> & { data: Recordings; selectionKey: string; embedded?: boolean }
+> & {
+  data: Recordings
+  selectionKey: string
+  embedded?: boolean
+  scrollLeftRef?: RefObject<number>
+}
 
 export function RecordingDistribution({
   data,
@@ -31,6 +37,7 @@ export function RecordingDistribution({
   dataUpdatedAt,
   selectionKey,
   embedded = false,
+  scrollLeftRef,
 }: DistributionProps) {
   // This is a query snapshot. Future hours are neither covered nor missing yet.
   const observedEnd = data
@@ -88,6 +95,7 @@ export function RecordingDistribution({
         }
         onSelect={selectSegment}
         zoom={Number(zoom)}
+        scrollLeftRef={scrollLeftRef}
       />
       <div className="coverage-summary mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground [&_strong]:ml-1.5 [&_strong]:font-medium [&_strong]:text-foreground">
         <span>{data.segments.length} 个录像片段</span>

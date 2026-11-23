@@ -1,9 +1,19 @@
 "use client"
 
-import { useImperativeHandle, useRef, type Ref } from "react"
+import {
+  useCallback,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type Ref,
+} from "react"
 import { XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import {
+  LiveRecordingIndicator,
+  SaveFullscreenActivity,
+} from "@/components/browser-save-provider"
 import { HlsVideo } from "@/components/hls-video"
 import { VideoWall } from "@/components/video-wall"
 import type {
@@ -11,6 +21,7 @@ import type {
   PlaybackOptions,
   StreamPlayerHandle,
 } from "./player/types"
+import { useFullscreenControls } from "./player/use-fullscreen-controls"
 import { useStreamSession } from "./player/use-stream-session"
 import { RestartAction } from "./player/restart-action"
 import { StreamIdle } from "./player/stream-idle"
@@ -31,7 +42,7 @@ export function PreviewPlayer(
         label="录像预览窗口"
         renderWindow={() => (
           <section
-            className="live-window @container relative flex w-full min-w-0 flex-col overflow-hidden rounded-sm border bg-card"
+            className="live-window @container relative flex w-full min-w-0 flex-col overflow-hidden border-b bg-card"
             aria-label="录像回放窗口"
           >
             <StreamPlayer {...props} />
@@ -61,10 +72,14 @@ export function StreamPlayer({
     close,
   } = useStreamSession(props)
   const frame = useRef<HTMLDivElement>(null)
+  const controlsHidden = useFullscreenControls(frame)
+  const [controlsHost, setControlsHost] = useState<HTMLDivElement | null>(null)
+  const [startedSessionId, setStartedSessionId] = useState<string>()
+  const onLiveStarted = useCallback((id: string) => setStartedSessionId(id), [])
   useImperativeHandle(ref, () => ({ start }))
   const stopLabel = loading ? "取消准备" : live ? "停止预览" : "关闭回放"
   const actions = (
-    <div className="preview-actions ml-auto flex shrink-0 items-center gap-1.5">
+    <>
       {live && session && !error && !expired && (
         <RestartAction
           container={frame}
@@ -88,7 +103,7 @@ export function StreamPlayer({
           <span className="@max-[400px]:hidden">{stopLabel}</span>
         </Button>
       )}
-    </div>
+    </>
   )
   return (
     <section
@@ -108,56 +123,84 @@ export function StreamPlayer({
               : "idle"
       }
     >
-      {session ? (
-        <HlsVideo
-          key={session.id}
-          session={session}
-          playbackStatus={playbackStatus}
-          live={live}
-          liveTrack={live ? track : undefined}
-          requestedTime={props.requestedTime}
-          onPlaybackTimeChange={props.onPlaybackTimeChange}
-          timeline={props.timeline}
-          onError={onError}
-          actions={actions}
-          frame={frame}
-          clipSource={
-            props.live
-              ? undefined
-              : {
-                  track: props.track,
-                  date: props.date,
-                  segmentId: props.segmentId,
-                  channelName: props.channelName ?? `通道 ${props.track}`,
-                  timeZone: props.timeZone,
-                }
-          }
-          initialPreferences={props.initialPreferences}
-          onPreferencesChange={props.onPreferencesChange}
-          onEnded={() => void finishPlayback()}
-        />
-      ) : (
-        <StreamIdle
-          track={track}
-          live={live}
-          loading={loading}
-          error={error}
-          expired={expired}
-          prepare={prepare}
-        />
-      )}
-      {!session && props.timeline}
-      {!session && loading && (
+      <div
+        className={cn(
+          "video-surface group/video [container-type:inline-size] relative min-w-0 fullscreen:flex fullscreen:flex-col fullscreen:justify-center fullscreen:bg-black",
+          live && "size-full"
+        )}
+        ref={frame}
+        data-live-starting={
+          live && !!session && startedSessionId !== session.id
+        }
+      >
+        <SaveFullscreenActivity />
+        {session && live && track && <LiveRecordingIndicator track={track} />}
+        {session ? (
+          <HlsVideo
+            key={session.id}
+            session={session}
+            playbackStatus={playbackStatus}
+            live={live}
+            liveStarted={startedSessionId === session.id}
+            liveTrack={live ? track : undefined}
+            requestedTime={props.requestedTime}
+            onPlaybackTimeChange={props.onPlaybackTimeChange}
+            onStepBoundary={props.onStepBoundary}
+            onLiveStarted={onLiveStarted}
+            controlsHost={controlsHost}
+            onError={onError}
+            actions={actions}
+            frame={frame}
+            clipSource={
+              props.live
+                ? undefined
+                : {
+                    track: props.track,
+                    date: props.date,
+                    segmentId: props.segmentId,
+                    channelName: props.channelName ?? `通道 ${props.track}`,
+                    timeZone: props.timeZone,
+                  }
+            }
+            initialPreferences={props.initialPreferences}
+            onPreferencesChange={props.onPreferencesChange}
+            onEnded={() => void finishPlayback()}
+          />
+        ) : (
+          <StreamIdle
+            track={track}
+            live={live}
+            loading={loading}
+            error={error}
+            expired={expired}
+            prepare={prepare}
+          />
+        )}
         <div
+          inert={controlsHidden}
           className={cn(
-            "preview-control-row flex min-w-0 items-center justify-between gap-2 px-2.5 py-2",
-            live &&
-              "absolute inset-x-0 bottom-0 bg-card/94 px-1.5 py-1.5 backdrop-blur-md"
+            "fullscreen-controls contents video-fullscreen:absolute video-fullscreen:inset-x-0 video-fullscreen:bottom-0 video-fullscreen:z-10 video-fullscreen:block video-fullscreen:transition-opacity video-fullscreen:duration-200 motion-reduce:video-fullscreen:transition-none",
+            controlsHidden &&
+              "video-fullscreen:pointer-events-none video-fullscreen:opacity-0"
           )}
         >
-          {actions}
+          {props.timeline}
+          <div ref={setControlsHost} className="contents" />
+          {!session && loading && (
+            <div
+              className={cn(
+                "preview-control-row flex min-w-0 items-center justify-between gap-2 px-2.5 py-2 video-fullscreen:static video-fullscreen:bg-card video-fullscreen:px-4 video-fullscreen:py-2",
+                live &&
+                  "absolute inset-x-0 bottom-0 bg-card/94 px-1.5 py-1.5 backdrop-blur-md"
+              )}
+            >
+              <div className="preview-actions ml-auto flex shrink-0 items-center gap-1.5">
+                {actions}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </section>
   )
 }

@@ -23,5 +23,6 @@ export type PlaybackOptions = {
   onActivityChange?: (active: boolean) => void
   requestedTime?: PlaybackTimeRequest
   onPlaybackTimeChange?: (at: string | undefined) => void
+  onStepBoundary?: (deltaSeconds: number, currentAt?: string) => boolean
   timeline?: ReactNode
 }

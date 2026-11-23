@@ -39,18 +39,49 @@ export function useRecordingScrub({
   const currentAt = playbackAt ?? requestedAt
   const position = currentAt ? (Date.parse(currentAt) - start) / 1000 : 0
   const value = Math.max(0, Math.min(max, scrub ?? position))
-  function commitTime(seconds: number) {
+  function blurTimelineSlider() {
+    const active = document.activeElement
+    if (
+      active instanceof HTMLInputElement &&
+      active.type === "range" &&
+      active.getAttribute("aria-label") === "回放时间轴"
+    )
+      active.blur()
+  }
+  function commitTime(seconds: number, fromPointer = false) {
     setScrub(undefined)
+    if (fromPointer) blurTimelineSlider()
     const at = start + Math.max(0, Math.min(max, seconds)) * 1000
-    const segment = data.segments.find(
+    const exact = data.segments.find(
       (segment) =>
         Date.parse(segment.startAt) <= at && at < Date.parse(segment.endAt)
     )
+    const floored =
+      exact ??
+      data.segments.find(
+        (segment) =>
+          Math.floor(Date.parse(segment.startAt) / 1000) * 1000 <= at &&
+          at < Date.parse(segment.endAt)
+      )
+    const now = Date.now()
+    const last = data.segments.at(-1)
+    const lastEnd = last ? Date.parse(last.endAt) : NaN
+    const activeTail =
+      !floored &&
+      last &&
+      at >= lastEnd &&
+      at <= Math.min(Date.parse(data.range.endAt) - 1000, now + 5000) &&
+      now - lastEnd >= -60_000 &&
+      now - lastEnd <= 15 * 60_000
+        ? last
+        : undefined
+    const segment = floored ?? activeTail
     if (!segment) {
       toast.info("所选时间没有录像，请选择有录像的时段。")
       return
     }
-    onSelect(segment.id, new Date(at).toISOString())
+    const targetAt = Math.max(at, Date.parse(segment.startAt))
+    onSelect(segment.id, new Date(targetAt).toISOString())
   }
   function cancelScrub() {
     const gesture = pointerGesture.current
@@ -82,7 +113,7 @@ export function useRecordingScrub({
         if (released.pointerId !== gesture.id) return
         gesture.controller.abort()
         if (!gesture.cancelled && !gesture.committed)
-          commitTime(gesture.seconds)
+          commitTime(gesture.seconds, true)
         if (pointerGesture.current === gesture) pointerGesture.current = null
       },
       { signal: gesture.controller.signal }
@@ -133,9 +164,18 @@ export function useRecordingScrub({
         if (gesture.committed) return
         gesture.committed = true
       }
-      commitTime(seconds)
+      commitTime(seconds, pointerCommit)
     },
   }
 
-  return { scrub, start, total, max, currentAt, value, sliderEvents }
+  return {
+    scrub,
+    start,
+    total,
+    max,
+    currentAt,
+    value,
+    sliderEvents,
+    commitTime,
+  }
 }

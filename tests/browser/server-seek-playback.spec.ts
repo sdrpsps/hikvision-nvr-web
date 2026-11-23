@@ -25,6 +25,7 @@ async function mockServerSeekPlayback(
     failedDelete?: boolean
     complete?: boolean
     total?: number
+    recordingsEndAt?: string
   } = {}
 ) {
   const posts: {
@@ -83,7 +84,7 @@ async function mockServerSeekPlayback(
     const segment = {
       id: segmentId,
       startAt: dayStart,
-      endAt: fileEnd,
+      endAt: options.recordingsEndAt ?? fileEnd,
       codec: "H.264",
     }
     return route.fulfill({
@@ -128,7 +129,10 @@ async function mockServerSeekPlayback(
           json: {
             id: sessionId(number),
             playlistUrl: `/api/streams/${sessionId(number)}/index.m3u8`,
-            fileRange: { startAt: fileStart, endAt: fileEnd },
+            fileRange: {
+              startAt: fileStart,
+              endAt: options.recordingsEndAt ?? fileEnd,
+            },
             mediaStartAt,
             ...(!options.missingFileDuration && { fileDurationSeconds: 3660 }),
             source: "shttp",
@@ -477,5 +481,180 @@ test.describe("SHTTP server-side seek", () => {
     )
     await expect(page.locator("video")).toHaveCount(0)
     expect(mock.posts).toHaveLength(1)
+  })
+
+  test("stepping past the start of an SHTTP window reopens an earlier target", async ({
+    page,
+  }) => {
+    const mock = await mockServerSeekPlayback(page, {
+      leadSeconds: 0.5,
+      complete: true,
+    })
+    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
+    const video = await pauseVideo(page)
+    await video.evaluate((element: HTMLVideoElement) => {
+      element.currentTime = 0
+    })
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.seeking)
+      )
+      .toBe(false)
+    await page.keyboard.press("ArrowLeft")
+    await expect.poll(() => mock.posts.length).toBe(2)
+    expect(Date.parse(mock.posts[1].at!)).toBeLessThan(
+      Date.parse(atSecond(1200))
+    )
+    await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  })
+
+  test("fullscreen timeline scrub while zoomed keeps fullscreen and scroll position", async ({
+    page,
+  }) => {
+    const mock = await mockServerSeekPlayback(page, {
+      recordingsEndAt: atSecond(43200),
+    })
+    await page.getByRole("slider", { name: "回放时间轴" }).fill("1200")
+    await pauseVideo(page)
+    await page.getByRole("button", { name: "全屏", exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => !!document.fullscreenElement))
+      .toBe(true)
+    await page
+      .getByRole("group", { name: "时间轴缩放" })
+      .getByRole("button", { name: "4 倍" })
+      .click()
+    const viewport = page.getByRole("region", {
+      name: "全天录像时间轴，可横向滚动",
+      exact: true,
+    })
+    await expect
+      .poll(() =>
+        viewport.evaluate((el) => el.scrollWidth > el.clientWidth + 500)
+      )
+      .toBe(true)
+    await viewport.evaluate((el) => {
+      el.scrollLeft = 600
+    })
+    const beforeScroll = await viewport.evaluate((el) => el.scrollLeft)
+    expect(beforeScroll).toBeGreaterThan(400)
+    const trackBox = await page
+      .locator('[data-slot="slider-track"]')
+      .boundingBox()
+    const vpBox = await viewport.boundingBox()
+    const dragStartX = vpBox!.x + vpBox!.width * 0.4
+    const dragEndX = vpBox!.x + vpBox!.width * 0.65
+    const dragY = trackBox!.y + trackBox!.height / 2
+    await page.mouse.move(dragStartX, dragY)
+    await page.mouse.down()
+    await page.mouse.move(dragEndX, dragY, { steps: 5 })
+    await page.mouse.up()
+    await expect.poll(() => mock.posts.length).toBe(2)
+    await expect(page.locator("video")).toHaveCount(1)
+    expect(
+      await page.evaluate(
+        () => !!document.fullscreenElement?.classList.contains("video-surface")
+      )
+    ).toBe(true)
+    expect(await viewport.evaluate((el) => el.scrollLeft)).toBeCloseTo(
+      beforeScroll,
+      0
+    )
+    await page.evaluate(() => document.exitFullscreen())
+    await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+  })
+
+  test("playback time picker seeks from idle and fullscreen without exiting fullscreen, and scrolls zoomed timeline", async ({
+    page,
+  }) => {
+    const pickTime = async (time: string, cancel = false) => {
+      await page
+        .getByRole("button", { name: "设定回放时间", exact: true })
+        .click()
+      for (const [index, unit] of ["时", "分", "秒"].entries()) {
+        const control = page.getByRole("spinbutton", {
+          name: `设定回放时间${unit}`,
+          exact: true,
+        })
+        const selected = Number(time.split(":")[index])
+        if (Number(await control.getAttribute("aria-valuenow")) === selected)
+          continue
+        await control.focus()
+        if (Number(await control.getAttribute("aria-valuemax")) === selected) {
+          await control.press("End")
+        } else {
+          await control.press("Home")
+          await expect(control).toHaveAttribute(
+            "aria-valuenow",
+            (await control.getAttribute("aria-valuemin")) ?? "0"
+          )
+          if (selected > 0)
+            await control.pressSequentially(String(selected).padStart(2, "0"), {
+              delay: 100,
+            })
+        }
+        await expect(control).toHaveAttribute("aria-valuenow", String(selected))
+      }
+      if (cancel) {
+        await page.keyboard.press("Escape")
+        return
+      }
+      await page
+        .getByRole("button", { name: "完成时间选择", exact: true })
+        .click()
+    }
+    const mock = await mockServerSeekPlayback(page, {
+      recordingsEndAt: atSecond(43200),
+    })
+    await page
+      .getByRole("group", { name: "时间轴缩放" })
+      .getByRole("button", { name: "4 倍" })
+      .click()
+    const viewport = page.getByRole("region", {
+      name: "全天录像时间轴，可横向滚动",
+      exact: true,
+    })
+    await expect
+      .poll(() =>
+        viewport.evaluate((el) => el.scrollWidth > el.clientWidth + 500)
+      )
+      .toBe(true)
+    await pickTime("10:15:30")
+    await expect.poll(() => mock.posts.length).toBe(1)
+    expect(mock.posts[0].at).toBe(atSecond(10 * 3600 + 15 * 60 + 30))
+    await pauseVideo(page)
+    await expect(page.getByLabel("当前回放时间")).toHaveText(/^10:15:3[01]$/)
+    const scrollAfterFirstPick = await viewport.evaluate((el) => el.scrollLeft)
+    expect(scrollAfterFirstPick).toBeGreaterThan(200)
+    await page.getByRole("button", { name: "全屏", exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => !!document.fullscreenElement))
+      .toBe(true)
+    await page
+      .getByRole("button", { name: "设定回放时间", exact: true })
+      .click()
+    expect(
+      await page
+        .locator('[data-slot="popover-content"]')
+        .evaluate((element) => document.fullscreenElement?.contains(element))
+    ).toBe(true)
+    await page.keyboard.press("Escape")
+    await pickTime("01:05:10")
+    await expect.poll(() => mock.posts.length).toBe(2)
+    expect(mock.posts[1].at).toBe(atSecond(3600 + 5 * 60 + 10))
+    await pauseVideo(page)
+    await expect(page.getByLabel("当前回放时间")).toHaveText(/^01:05:1[01]$/)
+    expect(
+      await page.evaluate(
+        () => !!document.fullscreenElement?.classList.contains("video-surface")
+      )
+    ).toBe(true)
+    const scrollAfterSecondPick = await viewport.evaluate((el) => el.scrollLeft)
+    expect(scrollAfterSecondPick).toBeLessThan(scrollAfterFirstPick)
+    await pickTime("03:00:00", true)
+    await page.waitForTimeout(200)
+    expect(mock.posts).toHaveLength(2)
+    await page.evaluate(() => document.exitFullscreen())
+    await page.getByRole("button", { name: "关闭回放", exact: true }).click()
   })
 })
