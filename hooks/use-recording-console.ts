@@ -35,7 +35,7 @@ export function useRecordingConsole() {
     },
     []
   )
-  const key = `${track}|${date}|${refresh}|${recordingsQuery.dataUpdatedAt}`
+  const key = `${track}|${date}|${refresh}`
   const error = recordingsQuery.error?.message
   useQueryErrorToast(
     resourceError ? channelsQuery : recordingsQuery,
@@ -50,7 +50,7 @@ export function useRecordingConsole() {
   function refreshQueries() {
     setRefresh((value) => value + 1)
     void channelsQuery.refetch()
-    if (track && validDate) void recordingsQuery.refetch()
+    if (track && validDate) void recordingsQuery.refresh()
   }
   const selection = useRecordingSelection(key, data)
 

@@ -205,6 +205,7 @@ export class PlaybackSessions {
         await writeFile(join(session.directory, asset), data, { mode: 0o600 })
       }
       let inputMetadata: PlaybackInputMetadata | undefined
+      let readyResolved = false
       for await (const media of this.fragments(
         segment.playbackURI,
         config,
@@ -296,7 +297,8 @@ export class PlaybackSessions {
           duration: media.decodeDurationSeconds,
           bytes: media.media.length,
         })
-        if (session.segments.length === 1) {
+        if (!readyResolved && this.duration(session) >= 0.05) {
+          readyResolved = true
           clearTimeout(startup)
           resolveReady()
         }
@@ -308,6 +310,11 @@ export class PlaybackSessions {
           "设备未返回可播放的录像。"
         )
       session.complete = true
+      if (!readyResolved) {
+        readyResolved = true
+        clearTimeout(startup)
+        resolveReady()
+      }
     })()
       .catch(async (error: unknown) => {
         session.error =

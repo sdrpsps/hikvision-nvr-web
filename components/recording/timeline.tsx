@@ -1,9 +1,20 @@
 "use client"
 
-import type { ReactNode } from "react"
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import type { Recordings } from "@/shared/contracts"
 import { useRecordingScrub } from "@/hooks/use-recording-scrub"
+import {
+  recordingOffset,
+  recordingTime,
+} from "@/lib/browser-save/recording-time"
 import { cn } from "@/lib/utils"
+import { RecordingTimePicker } from "@/components/recording/time-picker"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Slider } from "@/components/ui/slider"
 import { clock, segmentEnd } from "./format"
@@ -17,6 +28,7 @@ export function RecordingTimeline({
   onSelect,
   zoom,
   zoomControls,
+  scrollLeftRef,
 }: {
   data: Recordings
   selected: string
@@ -26,9 +38,54 @@ export function RecordingTimeline({
   onSelect: (id: string, at?: string) => void
   zoom: number
   zoomControls?: ReactNode
+  scrollLeftRef?: RefObject<number>
 }) {
-  const { scrub, start, total, max, currentAt, value, sliderEvents } =
-    useRecordingScrub({ data, requestedAt, playbackAt, onSelect })
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [now, setNow] = useState(() => Date.now())
+  useLayoutEffect(() => {
+    if (viewportRef.current && scrollLeftRef && scrollLeftRef.current > 0)
+      viewportRef.current.scrollLeft = scrollLeftRef.current
+  }, [scrollLeftRef])
+  const {
+    scrub,
+    start,
+    total,
+    max,
+    currentAt,
+    value,
+    sliderEvents,
+    commitTime,
+  } = useRecordingScrub({ data, requestedAt, playbackAt, onSelect })
+  const firstSegment = data.segments[0]
+  const lastSegment = data.segments.at(-1)
+  const minSecond = firstSegment
+    ? Math.max(
+        0,
+        Math.min(
+          max,
+          Math.floor((Date.parse(firstSegment.startAt) - start) / 1000)
+        )
+      )
+    : 0
+  const lastEnd = lastSegment ? Date.parse(lastSegment.endAt) : NaN
+  const activeTail =
+    lastSegment && now - lastEnd >= -60_000 && now - lastEnd <= 15 * 60_000
+  const maxSecond = lastSegment
+    ? Math.max(
+        minSecond,
+        Math.min(
+          max,
+          Math.floor(
+            ((activeTail ? Math.max(lastEnd - 1, now) : lastEnd - 1) - start) /
+              1000
+          )
+        )
+      )
+    : max
+  const pickerSecond = Math.max(
+    minSecond,
+    Math.min(maxSecond, Math.round(value))
+  )
   const ticks = Array.from(
     { length: Math.ceil(total / 3600000) + 1 },
     (_, index) => Math.min(index * 3600000, total)
@@ -48,8 +105,8 @@ export function RecordingTimeline({
     : clock(shownAt, data.timeZone)
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:gap-2">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-md:gap-x-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 max-md:gap-x-2">
           <div className="flex items-baseline gap-1.5 text-xs tabular-nums [&>span]:text-muted-foreground">
             <span>
               {scrub !== undefined
@@ -66,6 +123,69 @@ export function RecordingTimeline({
               {timeText}
             </time>
           </div>
+          <RecordingTimePicker
+            id="playback-time-picker"
+            label="设定回放时间"
+            triggerText={
+              <>
+                <span className="max-[440px]:hidden">设定回放时间</span>
+                <span className="hidden max-[440px]:inline">设时间</span>
+              </>
+            }
+            title="设定回放时间"
+            size="xs"
+            className="flex-none"
+            date={data.date}
+            value={recordingTime(
+              data.range.startAt,
+              pickerSecond,
+              data.timeZone
+            )}
+            min={recordingTime(data.range.startAt, minSecond, data.timeZone)}
+            max={recordingTime(data.range.startAt, maxSecond, data.timeZone)}
+            disabled={!data.segments.length}
+            onOpenChange={(nextOpen) => {
+              if (nextOpen) setNow(Date.now())
+            }}
+            onCommit={(selectedTime) => {
+              const targetSeconds = recordingOffset(
+                selectedTime,
+                data.range.startAt,
+                data.timeZone
+              )
+              if (targetSeconds === undefined) return
+              const viewport = viewportRef.current
+              if (
+                viewport &&
+                viewport.scrollWidth > viewport.clientWidth &&
+                total > 0
+              ) {
+                const ratio = Math.max(
+                  0,
+                  Math.min(1, (targetSeconds * 1000) / total)
+                )
+                const targetX = ratio * viewport.scrollWidth
+                const viewStart = viewport.scrollLeft
+                const viewEnd = viewStart + viewport.clientWidth
+                const margin = viewport.clientWidth * 0.15
+                if (
+                  targetX < viewStart + margin ||
+                  targetX > viewEnd - margin
+                ) {
+                  const nextScroll = Math.max(
+                    0,
+                    Math.min(
+                      viewport.scrollWidth - viewport.clientWidth,
+                      Math.round(targetX - viewport.clientWidth / 2)
+                    )
+                  )
+                  viewport.scrollLeft = nextScroll
+                  if (scrollLeftRef) scrollLeftRef.current = nextScroll
+                }
+              }
+              commitTime(targetSeconds, true)
+            }}
+          />
         </div>
         {zoomControls}
       </div>
@@ -74,10 +194,15 @@ export function RecordingTimeline({
         scrollbars="horizontal"
         contentProps={{ style: { minWidth: "fit-content" } }}
         viewportProps={{
+          ref: viewportRef,
           className: "px-2.5 pt-1 pb-2.5",
           tabIndex: 0,
           role: "region",
           "aria-label": "全天录像时间轴，可横向滚动",
+          onScroll: (event) => {
+            if (scrollLeftRef)
+              scrollLeftRef.current = event.currentTarget.scrollLeft
+          },
         }}
       >
         <div

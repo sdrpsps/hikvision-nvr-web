@@ -59,7 +59,10 @@ export function createStreamRoutes(
       previewSchema.parse(
         await previews.create(
           service.config,
-          (signal) => service.resolveSegment(track, date, segmentId, signal),
+          (signal) =>
+            at === undefined
+              ? service.resolveSegment(track, date, segmentId!, signal)
+              : service.resolveSegment(track, date, segmentId, signal, at),
           c.req.raw.signal,
           at
         )

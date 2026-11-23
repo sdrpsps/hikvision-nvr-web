@@ -105,6 +105,44 @@ export function useRecordingSelection(key: string, data?: Recordings) {
     })
   }
 
+  function stepBoundary(deltaSeconds: number, currentAt?: string) {
+    if (!data || !segment) return false
+    const index = data.segments.findIndex((item) => item.id === segment.id)
+    if (index < 0) return false
+    if (deltaSeconds < 0) {
+      const segStartMs = Date.parse(segment.startAt)
+      const atMs = currentAt ? Date.parse(currentAt) : segStartMs
+      const requestedAtMs = requestedTime
+        ? Date.parse(requestedTime.at)
+        : segStartMs
+      if (
+        Number.isFinite(atMs) &&
+        atMs > segStartMs + 50 &&
+        requestedAtMs > segStartMs + 50
+      ) {
+        const targetMs = Math.max(segStartMs, atMs + deltaSeconds * 1000)
+        selectSegment(segment.id, new Date(targetMs).toISOString())
+        return true
+      }
+      if (index > 0) {
+        const prev = data.segments[index - 1]
+        const targetMs = Math.max(
+          Date.parse(prev.startAt),
+          Date.parse(prev.endAt) + Math.min(deltaSeconds * 1000, -1000)
+        )
+        selectSegment(prev.id, new Date(targetMs).toISOString())
+        return true
+      }
+      return false
+    }
+    if (deltaSeconds > 0 && index + 1 < data.segments.length) {
+      const next = data.segments[index + 1]
+      selectSegment(next.id, next.startAt)
+      return true
+    }
+    return false
+  }
+
   return {
     selected,
     requestedTime,
@@ -114,6 +152,7 @@ export function useRecordingSelection(key: string, data?: Recordings) {
     listOpen,
     segment,
     selectSegment,
+    stepBoundary,
     updatePlaybackTime,
     updatePlaybackActivity,
     nextSegment,

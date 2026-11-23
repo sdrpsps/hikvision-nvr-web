@@ -29,7 +29,7 @@ export function StreamIdle({
   const startLabel = error || expired ? "重试" : live ? "开始预览" : "播放"
   return (
     <Empty
-      className="stream-idle [container-type:size] relative aspect-video min-h-0 w-full flex-none bg-muted p-2"
+      className="stream-idle [container-type:size] relative aspect-video min-h-0 w-full flex-none bg-muted p-2 video-fullscreen:aspect-auto video-fullscreen:h-0 video-fullscreen:w-full video-fullscreen:flex-1"
       aria-busy={loading}
     >
       {!loading && (

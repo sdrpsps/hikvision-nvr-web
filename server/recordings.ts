@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto"
+import { createHmac, randomUUID } from "node:crypto"
 import { Temporal } from "@js-temporal/polyfill"
 import type { NvrConfig } from "./config"
 import { AppError } from "./errors"
@@ -58,7 +58,7 @@ export function validatePlaybackUri(uri: string, config: NvrConfig) {
 export class NvrService {
   readonly client: IsapiClient
   private readonly channelService: ChannelsService
-  private key = randomBytes(32)
+  private readonly key: Buffer
   private cache = new Map<string, { expires: number; result: Recordings }>()
   private pending = new Map<string, Promise<Recordings>>()
   private active = 0
@@ -68,6 +68,27 @@ export class NvrService {
   ) {
     this.client = client ?? new IsapiClient(config)
     this.channelService = new ChannelsService(this.client)
+    this.key = createHmac("sha256", "hikvision-open-client:segment-id")
+      .update(
+        `${config.NVR_HOST}:${config.NVR_HTTP_PORT}:${config.NVR_RTSP_PORT}:${config.NVR_USERNAME}:${config.NVR_PASSWORD}`
+      )
+      .digest()
+  }
+  private segmentId(segment: RawSegment) {
+    let identity = segment.playbackURI
+    try {
+      const url = new URL(segment.playbackURI)
+      const names = url.searchParams.getAll("name")
+      const name = names.length === 1 ? names[0].trim() : ""
+      if (name)
+        identity = `${segment.trackId}|${url.pathname}|${name}|${segment.startAt}`
+    } catch {
+      // Fall back to the full URI if a synthetic test supplies a non-URL string.
+    }
+    return createHmac("sha256", this.key)
+      .update(identity)
+      .digest("hex")
+      .slice(0, 32)
   }
   device() {
     return this.client.request("/ISAPI/System/deviceInfo").then(parseDevice)
@@ -191,17 +212,28 @@ export class NvrService {
   async resolveSegment(
     trackId: string,
     date: string,
-    id: string,
-    signal?: AbortSignal
+    id?: string,
+    signal?: AbortSignal,
+    at?: string
   ) {
     const started = Date.now()
-    const segment = (await this.queryRaw(trackId, date, signal)).find(
-      (segment) =>
-        createHmac("sha256", this.key)
-          .update(segment.playbackURI)
-          .digest("hex")
-          .slice(0, 32) === id
-    )
+    const raw = await this.queryRaw(trackId, date, signal)
+    this.cacheRecordings(trackId, date, raw)
+    const byId = id
+      ? raw.find((segment) => this.segmentId(segment) === id)
+      : undefined
+    let segment = byId
+    if (at !== undefined) {
+      const target = Date.parse(at)
+      const fits = (item: RawSegment) =>
+        Number.isFinite(target) &&
+        Date.parse(item.startAt) <= target &&
+        target < Date.parse(item.endAt)
+      if (!segment || !fits(segment)) {
+        const byTime = raw.find(fits)
+        if (byTime) segment = byTime
+      }
+    }
     if (!segment)
       throw new AppError(
         "RECORDING_NOT_FOUND",
@@ -290,9 +322,19 @@ export class NvrService {
         const matches = result.value.filter((candidate) => {
           if (candidate.trackId !== segment.trackId) return false
           const candidateFile = identity(candidate.playbackURI)
+          if (candidateFile?.name !== file.name) return false
+          const active =
+            Math.abs(Date.now() - Math.max(end, Date.parse(candidate.endAt))) <
+            120_000
+          const sameSize =
+            candidateFile.size === file.size ||
+            (active &&
+              /^\d+$/.test(candidateFile.size) &&
+              /^\d+$/.test(file.size) &&
+              Number(candidateFile.size) > 0 &&
+              Number(file.size) > 0)
           return (
-            candidateFile?.name === file.name &&
-            candidateFile.size === file.size &&
+            sameSize &&
             Date.parse(candidate.startAt) < neighborEnd &&
             Date.parse(candidate.endAt) > neighborStart
           )
@@ -324,41 +366,58 @@ export class NvrService {
       clearTimeout(timeout)
     }
   }
-  async recordings(trackId: string, date: string): Promise<Recordings> {
-    const key = `${trackId}|${date}`,
-      cached = this.cache.get(key)
+  private cacheRecordings(
+    trackId: string,
+    date: string,
+    raw: RawSegment[]
+  ): Recordings {
+    const key = `${trackId}|${date}`
+    const range = dayRange(date, this.config.NVR_TIME_ZONE)
+    const segments = raw.map((segment) => ({
+      startAt: segment.startAt,
+      endAt: segment.endAt,
+      codec: segment.codec,
+      recordType: segment.recordType,
+      id: this.segmentId(segment),
+    }))
+    const result: Recordings = {
+      trackId,
+      date,
+      timeZone: this.config.NVR_TIME_ZONE,
+      range,
+      segments,
+      ...coverageAndGaps(segments, range),
+      warnings: [],
+    }
+    const now = Date.now()
+    for (const [entryKey, item] of this.cache)
+      if (item.expires <= now) this.cache.delete(entryKey)
+    if (this.cache.size >= 32)
+      this.cache.delete(this.cache.keys().next().value!)
+    const last = segments.at(-1)
+    const activeTail =
+      !!last && Math.abs(now - Date.parse(last.endAt)) <= 5 * 60_000
+    this.cache.set(key, {
+      result,
+      expires: now + (activeTail ? 2000 : 30000),
+    })
+    return result
+  }
+  async recordings(
+    trackId: string,
+    date: string,
+    options?: { fresh?: boolean }
+  ): Promise<Recordings> {
+    const key = `${trackId}|${date}`
+    if (options?.fresh) this.cache.delete(key)
+    const cached = this.cache.get(key)
     if (cached && cached.expires > Date.now()) return cached.result
-    if (this.pending.has(key)) return this.pending.get(key)!
+    if (!options?.fresh && this.pending.has(key)) return this.pending.get(key)!
     const query = this.queryRaw(trackId, date)
-      .then((raw) => {
-        const range = dayRange(date, this.config.NVR_TIME_ZONE)
-        const segments = raw.map((segment) => ({
-          startAt: segment.startAt,
-          endAt: segment.endAt,
-          codec: segment.codec,
-          recordType: segment.recordType,
-          id: createHmac("sha256", this.key)
-            .update(segment.playbackURI)
-            .digest("hex")
-            .slice(0, 32),
-        }))
-        const result: Recordings = {
-          trackId,
-          date,
-          timeZone: this.config.NVR_TIME_ZONE,
-          range,
-          segments,
-          ...coverageAndGaps(segments, range),
-          warnings: [],
-        }
-        for (const [key, item] of this.cache)
-          if (item.expires <= Date.now()) this.cache.delete(key)
-        if (this.cache.size >= 32)
-          this.cache.delete(this.cache.keys().next().value!)
-        this.cache.set(key, { result, expires: Date.now() + 30000 })
-        return result
+      .then((raw) => this.cacheRecordings(trackId, date, raw))
+      .finally(() => {
+        if (this.pending.get(key) === query) this.pending.delete(key)
       })
-      .finally(() => this.pending.delete(key))
     this.pending.set(key, query)
     return query
   }

@@ -532,4 +532,110 @@ describe("recording time at the device boundary", () => {
       now.mockRestore()
     }
   })
+
+  it("keeps segment IDs stable as active recordings grow and updates cache on resolve", async () => {
+    const firstUri =
+      "rtsp://nvr.test/Streaming/tracks/101/?starttime=20261024T220000Z&endtime=20261024T224600Z&name=active-tail&size=1000"
+    const grownUri =
+      "rtsp://nvr.test/Streaming/tracks/101/?starttime=20261024T220000Z&endtime=20261024T224730Z&name=active-tail&size=2500"
+    const nextUri =
+      "rtsp://nvr.test/Streaming/tracks/101/?starttime=20261024T224730Z&endtime=20261024T224810Z&name=next-file&size=400"
+    let snapshot: RawSegment[] = [
+      {
+        trackId: "101",
+        startAt: "2026-10-24T14:00:00.000Z",
+        endAt: "2026-10-24T14:46:00.000Z",
+        playbackURI: firstUri,
+      },
+    ]
+    const service = new NvrService(config)
+    const query = vi
+      .spyOn(service, "queryRaw")
+      .mockImplementation(async () => snapshot)
+    const initial = await service.recordings("101", "2026-10-24")
+    const stableId = initial.segments[0].id
+
+    snapshot = [
+      {
+        trackId: "101",
+        startAt: "2026-10-24T14:00:00.000Z",
+        endAt: "2026-10-24T14:47:30.000Z",
+        playbackURI: grownUri,
+      },
+    ]
+    const resolvedGrown = await service.resolveSegment(
+      "101",
+      "2026-10-24",
+      stableId,
+      undefined,
+      "2026-10-24T14:47:10.000Z"
+    )
+    expect(resolvedGrown.playbackURI).toBe(grownUri)
+    expect(resolvedGrown.endAt).toBe("2026-10-24T14:47:30.000Z")
+
+    // Write-through cache update immediately reflects the extended endAt without waiting 30s.
+    const cachedAfterResolve = await service.recordings("101", "2026-10-24")
+    expect(cachedAfterResolve.segments[0]).toMatchObject({
+      id: stableId,
+      endAt: "2026-10-24T14:47:30.000Z",
+    })
+    expect(query).toHaveBeenCalledTimes(2)
+
+    // If the tail rolled over into a new file, `at` matches the new file even with the previous ID.
+    snapshot = [
+      ...snapshot,
+      {
+        trackId: "101",
+        startAt: "2026-10-24T14:47:30.000Z",
+        endAt: "2026-10-24T14:48:10.000Z",
+        playbackURI: nextUri,
+      },
+    ]
+    const resolvedRollover = await service.resolveSegment(
+      "101",
+      "2026-10-24",
+      stableId,
+      undefined,
+      "2026-10-24T14:47:50.000Z"
+    )
+    expect(resolvedRollover.playbackURI).toBe(nextUri)
+
+    const resolvedByTimeOnly = await service.resolveSegment(
+      "101",
+      "2026-10-24",
+      undefined,
+      undefined,
+      "2026-10-24T14:47:50.000Z"
+    )
+    expect(resolvedByTimeOnly.playbackURI).toBe(nextUri)
+  })
+
+  it("bypasses cache when fresh=1 is requested", async () => {
+    let end = "2026-10-17T02:00:00Z"
+    const request = vi.fn<IsapiClient["request"]>(async (path: string) =>
+      path.endsWith("tracks")
+        ? "<TrackList><Track><id>101</id><Enable>true</Enable></Track></TrackList>"
+        : xml("2026-10-17T01:00:00Z", end)
+    )
+    const service = new NvrService(
+      { ...config, NVR_RECORDING_TIME_MODE: "device-local" },
+      { request } as unknown as IsapiClient
+    )
+    const app = createApp(() => service)
+    const first = await (
+      await app.request("/api/recordings?track=101&date=2026-10-17")
+    ).json()
+    expect(first.segments[0].endAt).toBe("2026-10-16T18:00:00.000Z")
+
+    end = "2026-10-17T03:00:00Z"
+    const cached = await (
+      await app.request("/api/recordings?track=101&date=2026-10-17")
+    ).json()
+    expect(cached.segments[0].endAt).toBe("2026-10-16T18:00:00.000Z")
+
+    const fresh = await (
+      await app.request("/api/recordings?track=101&date=2026-10-17&fresh=1")
+    ).json()
+    expect(fresh.segments[0].endAt).toBe("2026-10-16T19:00:00.000Z")
+  })
 })

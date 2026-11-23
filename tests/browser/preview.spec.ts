@@ -1594,3 +1594,130 @@ test("closing a seek queued behind deletion prevents the pending player from reo
     mock.releasePending()
   }
 })
+
+test("fullscreen button stays rightmost and zoomed timeline scrub keeps scrollLeft across start and segment switch", async ({
+  page,
+}) => {
+  const seg1 = "e".repeat(32)
+  const seg2 = "f".repeat(32)
+  const longSegments = [
+    {
+      id: seg1,
+      startAt: "2026-10-16T16:00:00Z",
+      endAt: "2026-10-17T00:00:00Z",
+      codec: "H.264-BP",
+    },
+    {
+      id: seg2,
+      startAt: "2026-10-17T00:00:00Z",
+      endAt: "2026-10-17T08:00:00Z",
+      codec: "H.264-BP",
+    },
+  ]
+  const posts: { segmentId: string; at?: string }[] = []
+  const media = mediaByCodec.h264
+  await page.route("**/api/streams/**", async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === "POST") {
+      const body = request.postDataJSON()
+      posts.push(body)
+      const sid = `66666666-6666-4666-8666-${String(posts.length).padStart(12, "0")}`
+      const segment = longSegments.find((item) => item.id === body.segmentId)!
+      return route.fulfill({
+        status: 201,
+        json: {
+          id: sid,
+          fileRange: { startAt: segment.startAt, endAt: segment.endAt },
+          startOffsetSeconds: 0,
+          playlistUrl: `/api/streams/${sid}/index.m3u8`,
+          durationSeconds: 3,
+          expiresAt: new Date(Date.now() + 120000).toISOString(),
+          mode: "stream-copy",
+          codec: "h264",
+        },
+      })
+    }
+    if (request.method() === "DELETE") return route.fulfill({ status: 204 })
+    if (path.endsWith("/status"))
+      return route.fulfill({ json: { complete: true, durationSeconds: 3 } })
+    if (path.endsWith("/audio"))
+      return route.fulfill({
+        json: { status: "unsupported", videoStartSeconds: 0, chunks: [] },
+      })
+    if (path.endsWith("index.m3u8"))
+      return route.fulfill({
+        contentType: "application/vnd.apple.mpegurl",
+        body: '#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:3.000000,\n0.m4s\n#EXT-X-ENDLIST\n',
+      })
+    return route.fulfill({
+      contentType: path.endsWith("init.mp4")
+        ? "video/mp4"
+        : "video/iso.segment",
+      body: path.endsWith("init.mp4") ? media.init : media.media,
+    })
+  })
+  await mockQueries(page, longSegments)
+  await page
+    .getByRole("group", { name: "时间轴缩放" })
+    .getByRole("button", { name: "4 倍" })
+    .click()
+  const viewport = page.getByRole("region", {
+    name: "全天录像时间轴，可横向滚动",
+    exact: true,
+  })
+  await expect
+    .poll(() =>
+      viewport.evaluate((el) => el.scrollWidth > el.clientWidth + 500)
+    )
+    .toBe(true)
+  const targetScroll = await viewport.evaluate((el) => {
+    const next = Math.round((el.scrollWidth - el.clientWidth) * 0.35)
+    el.scrollLeft = next
+    return el.scrollLeft
+  })
+  expect(targetScroll).toBeGreaterThan(300)
+  const vpBox = await viewport.boundingBox()
+  const trackBox = await page
+    .locator('[data-slot="slider-track"]')
+    .boundingBox()
+  const boundaryX = trackBox!.x + trackBox!.width / 3
+  const seg1X = Math.max(vpBox!.x + 30, boundaryX - 80)
+  const seg2X = Math.min(vpBox!.x + vpBox!.width - 30, boundaryX + 80)
+  const y = trackBox!.y + trackBox!.height / 2
+  await page.mouse.move(seg1X - 20, y)
+  await page.mouse.down()
+  await page.mouse.move(seg1X, y, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0].segmentId).toBe(seg1)
+  await pauseSequenceVideo(page)
+  expect(await viewport.evaluate((el) => el.scrollLeft)).toBeCloseTo(
+    targetScroll,
+    0
+  )
+  const controlsButtons = await page
+    .locator(".live-video-controls button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        label: button.getAttribute("aria-label"),
+        right: button.getBoundingClientRect().right,
+      }))
+    )
+  const maxRight = Math.max(...controlsButtons.map((item) => item.right))
+  const fullscreenButton = controlsButtons.find((item) => item.label === "全屏")
+  expect(fullscreenButton).toBeDefined()
+  expect(fullscreenButton!.right).toBe(maxRight)
+  await page.mouse.move(seg2X - 20, y)
+  await page.mouse.down()
+  await page.mouse.move(seg2X, y, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(() => posts.length).toBe(2)
+  expect(posts[1].segmentId).toBe(seg2)
+  await pauseSequenceVideo(page)
+  expect(await viewport.evaluate((el) => el.scrollLeft)).toBeCloseTo(
+    targetScroll,
+    0
+  )
+  await page.getByRole("button", { name: "关闭回放", exact: true }).click()
+})
